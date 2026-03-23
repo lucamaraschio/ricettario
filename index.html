@@ -1326,47 +1326,95 @@ function saveKey() {
   if (k) { localStorage.setItem('geminiKey', k); showToast('🔑 Chiave salvata'); }
 }
 
-// ── SMART CROP: extract only the dish photo from the recipe card front ──
-async function cropDishPhoto(dataUrl, apiKey) {
-  try {
-    const [meta, b64] = dataUrl.split(',');
-    const mime = meta.match(/:(.*?);/)[1];
+// ── SMART CROP: una sola chiamata Gemini per tutte le foto ──
+async function cropFromBox(dataUrl, box, rotate) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const W = img.naturalWidth, H = img.naturalHeight;
+      const cx = Math.max(0, box.x * W);
+      const cy = Math.max(0, box.y * H);
+      const cw = Math.min(W - cx, box.w * W);
+      const ch = Math.min(H - cy, box.h * H);
+      if (cw < 20 || ch < 20) { resolve(dataUrl); return; }
 
-    // Ask Gemini for the bounding box of the dish photo
+      const canvas = document.createElement('canvas');
+      const angle = (rotate || 0) * Math.PI / 180;
+      const sin = Math.abs(Math.sin(angle)), cos = Math.abs(Math.cos(angle));
+
+      if (rotate) {
+        canvas.width  = Math.round(cw * cos + ch * sin);
+        canvas.height = Math.round(cw * sin + ch * cos);
+      } else {
+        canvas.width = cw; canvas.height = ch;
+      }
+
+      const ctx = canvas.getContext('2d');
+      if (rotate) {
+        ctx.translate(canvas.width/2, canvas.height/2);
+        ctx.rotate(angle);
+        ctx.drawImage(img, cx, cy, cw, ch, -cw/2, -ch/2, cw, ch);
+      } else {
+        ctx.drawImage(img, cx, cy, cw, ch, 0, 0, cw, ch);
+      }
+      resolve(canvas.toDataURL('image/jpeg', 0.82));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
+async function extractAllPhotos(fronteUrl, retroUrl, numPassi, apiKey) {
+  // Unica chiamata Gemini per trovare tutte le coordinate foto
+  try {
+    const parts = [];
+    const addImg = (url) => {
+      const [meta, b64] = url.split(',');
+      const mime = meta.match(/:(.*?);/)[1];
+      parts.push({ inline_data: { mime_type: mime, data: b64 } });
+    };
+
+    addImg(fronteUrl);
+    if (retroUrl) addImg(retroUrl);
+
+    const retroTxt = retroUrl
+      ? `Il retro ha ${numPassi} passi numerati, ognuno con una foto quadrata o rettangolare.`
+      : 'Non c\'è foto del retro.';
+
+    parts.push({ text: `Analizza queste foto di una scheda ricetta HelloFresh.
+PRIMA IMMAGINE = fronte: ha una grande foto del piatto in alto a sinistra e testo/titolo a destra.
+${retroUrl ? 'SECONDA IMMAGINE = retro: ha passi numerati con foto.' : ''}
+
+${retroTxt}
+
+Restituisci SOLO JSON puro (no markdown) con questa struttura:
+{
+  "piatto": {"img": 0, "x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0, "rotate": 0},
+  "passi": [
+    {"img": 1, "x": 0.0, "y": 0.0, "w": 0.5, "h": 0.33, "rotate": 0},
+    ...
+  ]
+}
+- "img": 0 = prima immagine (fronte), 1 = seconda immagine (retro)
+- x,y,w,h: coordinate normalizzate 0.0-1.0 della foto nella sua immagine
+- rotate: gradi di rotazione necessari (0 se già dritta, es. 90 se ruotata)
+- Per "piatto": ritaglia SOLO la foto grande del piatto, escludi testo e icone ingredienti
+- Per "passi": una entry per ogni passo con foto, nell'ordine dei passi (es. passo 1, 2, 3...)
+- Se un passo non ha foto visibile, omettilo dall'array
+Solo JSON puro.` });
+
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`,
       { method:'POST', headers:{'Content-Type':'application/json','x-goog-api-key': apiKey},
-        body: JSON.stringify({ contents:[{ parts:[
-          { inline_data: { mime_type: mime, data: b64 } },
-          { text: `Questa è la foto del fronte di una scheda ricetta (stile HelloFresh). In alto a sinistra c'è la foto del piatto finito. In basso ci sono piccole icone degli ingredienti. A destra c'è testo verticale con il titolo. Restituisci SOLO un JSON puro con le coordinate normalizzate (0.0-1.0) che ritagliano SOLO la foto grande del piatto finito, escludendo le icone ingredienti in basso e il testo a destra. Formato: {"x":0.0,"y":0.0,"w":1.0,"h":1.0}. Solo JSON puro, nessun altro testo.` }
-        ]}] }) }
+        body: JSON.stringify({ contents:[{ parts }] }) }
     );
-    if (!res.ok) return dataUrl; // fallback: use full image
+    if (!res.ok) return null;
     const data = await res.json();
     let txt = (data.candidates?.[0]?.content?.parts?.[0]?.text || '').replace(/```json|```/g,'').trim();
-    const box = JSON.parse(txt);
-
-    // Crop using canvas
-    return await new Promise((resolve) => {
-      const img = new Image();
-      img.onload = () => {
-        const W = img.naturalWidth, H = img.naturalHeight;
-        const cx = Math.max(0, box.x * W);
-        const cy = Math.max(0, box.y * H);
-        const cw = Math.min(W - cx, box.w * W);
-        const ch = Math.min(H - cy, box.h * H);
-        if (cw < 20 || ch < 20) { resolve(dataUrl); return; }
-        const canvas = document.createElement('canvas');
-        canvas.width = cw; canvas.height = ch;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, cx, cy, cw, ch, 0, 0, cw, ch);
-        resolve(canvas.toDataURL('image/jpeg', 0.88));
-      };
-      img.onerror = () => resolve(dataUrl);
-      img.src = dataUrl;
-    });
+    return JSON.parse(txt);
   } catch(e) {
-    return dataUrl; // fallback
+    console.warn('extractAllPhotos error', e);
+    return null;
   }
 }
 
@@ -1375,9 +1423,10 @@ async function startScan() {
   if (!key) { showToast('⚠️ Inserisci la Gemini API key'); return; }
   localStorage.setItem('geminiKey', key);
   closeScan();
-  showLoading('Gemini legge la scheda ricetta…', 'Estrazione ingredienti e passi in corso');
+  showLoading('Gemini legge la scheda ricetta…', 'Estrazione dati in corso');
 
   try {
+    // ── STEP 1: estrai testo/dati ──
     const parts = [];
     const addImg = (dataUrl) => {
       const [meta, b64] = dataUrl.split(',');
@@ -1399,19 +1448,17 @@ async function startScan() {
   "passi": [{"testo":"descrizione completa del passo","fotoUrl":null}],
   "note": "eventuali consigli o note finali"
 }
-IMPORTANTE: estrai TUTTI gli ingredienti con le quantità esatte come scritto sulla scheda. Estrai tutti i passi numerati in ordine. Per i passi includi tutto il testo descrittivo. Solo JSON puro.` });
+IMPORTANTE: estrai TUTTI gli ingredienti con le quantità esatte. Estrai tutti i passi numerati in ordine con testo completo. Solo JSON puro.` });
 
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`,
       { method:'POST', headers:{'Content-Type':'application/json', 'x-goog-api-key': key},
         body: JSON.stringify({ contents:[{ parts }] }) }
     );
-
     if (!res.ok) {
       const err = await res.json();
       throw new Error(err.error?.message || `Errore API (${res.status})`);
     }
-
     const data = await res.json();
     let text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
     text = text.replace(/```json|```/g,'').trim();
@@ -1419,18 +1466,43 @@ IMPORTANTE: estrai TUTTI gli ingredienti con le quantità esatte come scritto su
     try { extracted = JSON.parse(text); }
     catch { throw new Error('Impossibile interpretare la risposta. Riprova con foto più nitide.'); }
 
+    // ── STEP 2: estrai coordinate di tutte le foto ──
+    showLoading('Ritaglio foto…', 'Identificazione foto piatto e passi');
+    const numPassi = (extracted.passi || []).length;
+    const boxes = await extractAllPhotos(scanData.A, scanData.B, numPassi, key);
+
+    // ── STEP 3: ritaglia tutte le foto in parallelo ──
+    const images = [scanData.A, scanData.B].filter(Boolean);
+
+    let fotoUrl = scanData.A; // fallback
+    if (boxes?.piatto) {
+      const src = images[boxes.piatto.img] || scanData.A;
+      fotoUrl = await cropFromBox(src, boxes.piatto, boxes.piatto.rotate || 0);
+    }
+
+    // Associa foto ritagliate ai passi
+    const passiConFoto = (extracted.passi || []).map((p, i) => {
+      const boxPasso = boxes?.passi?.[i];
+      return { testo: p.testo || p, fotoUrl: null, _boxPasso: boxPasso };
+    });
+
+    // Ritaglia foto passi in parallelo
+    await Promise.all(passiConFoto.map(async (p) => {
+      if (p._boxPasso) {
+        const src = images[p._boxPasso.img] || scanData.B || scanData.A;
+        try {
+          p.fotoUrl = await cropFromBox(src, p._boxPasso, p._boxPasso.rotate || 0);
+        } catch(e) { p.fotoUrl = null; }
+      }
+      delete p._boxPasso;
+    }));
+
     hideLoading();
-    showLoading('Ritaglio foto del piatto…', 'Identificazione automatica in corso');
 
-    // Smart-crop: extract only the dish photo from the front card
-    const croppedFoto = await cropDishPhoto(scanData.A, key);
-
-    hideLoading();
-
-    // Pre-fill with cropped dish photo as cover — NO id so it's treated as new
     const recipe = {
       ...extracted,
-      fotoUrl: croppedFoto,
+      passi: passiConFoto,
+      fotoUrl,
       fav: false,
       createdAt: Date.now()
     };
