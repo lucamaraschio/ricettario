@@ -23,11 +23,14 @@ body{font-family:var(--fb);background:var(--bg);color:var(--text);-webkit-font-s
 .tb-btn:active{transform:scale(.92)}
 .tb-btn.dark{background:var(--accent);color:white;font-size:20px}
 .tb-btn.light{background:var(--tag-bg);color:var(--text)}
+.tb-btn.filter-active{background:var(--accent2);color:white;position:relative}
+.filter-dot{position:absolute;top:6px;right:6px;width:8px;height:8px;background:#FF3B30;border-radius:50%;border:2px solid var(--bg)}
 .search-bar{padding:0 20px 10px;position:relative}
-.search-input{width:100%;padding:12px 16px 12px 42px;border-radius:14px;border:1.5px solid var(--border);background:var(--white);font-family:var(--fb);font-size:15px;color:var(--text);outline:none;transition:border-color .2s;box-shadow:0 1px 4px rgba(0,0,0,.04)}
+.search-input{width:100%;padding:12px 38px 12px 42px;border-radius:14px;border:1.5px solid var(--border);background:var(--white);font-family:var(--fb);font-size:15px;color:var(--text);outline:none;transition:border-color .2s;box-shadow:0 1px 4px rgba(0,0,0,.04)}
 .search-input:focus{border-color:var(--accent)}
 .search-input::placeholder{color:var(--text3)}
 .search-ico{position:absolute;left:34px;top:50%;transform:translateY(-50%);font-size:15px;opacity:.4;pointer-events:none}
+.search-clear{position:absolute;right:34px;top:50%;transform:translateY(-50%);width:20px;height:20px;border-radius:50%;background:var(--text3);border:none;color:white;font-size:11px;cursor:pointer;display:none;align-items:center;justify-content:center;line-height:1;font-weight:700}
 .search-dropdown{position:absolute;top:calc(100% - 4px);left:20px;right:20px;background:var(--white);border-radius:var(--r-sm);box-shadow:var(--shadow-lg);border:1px solid var(--border);z-index:200;overflow:hidden;display:none;max-height:300px;overflow-y:auto}
 .search-dropdown.open{display:block}
 .sd-item{display:flex;align-items:center;gap:12px;padding:10px 14px;cursor:pointer;transition:background .15s;border-bottom:1px solid var(--border)}
@@ -205,7 +208,7 @@ textarea.fi{resize:none;min-height:72px;line-height:1.5}
       <div class="topbar-inner">
         <span class="topbar-title">Ricettario <span id="fbDot" style="font-size:10px;vertical-align:middle">🔴</span></span>
         <div style="display:flex;gap:8px">
-          <button class="tb-btn light" onclick="openFilter()">⚗️</button>
+          <button class="tb-btn light" id="filterBtn" onclick="openFilter()">⚗️</button>
           <button class="tb-btn light" onclick="document.getElementById('setupOverlay').classList.add('open')">⚙️</button>
           <button class="tb-btn dark" onclick="openScan()">📷</button>
         </div>
@@ -213,6 +216,7 @@ textarea.fi{resize:none;min-height:72px;line-height:1.5}
       <div class="search-bar">
         <span class="search-ico">🔍</span>
         <input class="search-input" id="searchInput" placeholder="Cerca ricette o ingredienti…" oninput="onSearch(this.value)" autocomplete="off">
+        <button class="search-clear" id="searchClear" onclick="clearSearch()">✕</button>
         <div class="search-dropdown" id="searchDropdown"></div>
       </div>
       <div class="chips-row">
@@ -424,7 +428,9 @@ function renderPreferiti(){
 async function toggleFav(id){const r=DB.find(x=>x.id===id);if(!r)return;r.fav=!r.fav;if(window._fb?.ready()){try{await window._fb.save(r);}catch(e){}}else{persistLocal();renderCatalogo();}showToast(r.fav?'❤️ Aggiunto ai preferiti':'🤍 Rimosso dai preferiti');}
 
 // SEARCH DROPDOWN
-function onSearch(v){filterSearch=v;clearTimeout(_stTimer);_stTimer=setTimeout(()=>{renderCatalogo();renderDD(v);},150);}
+function onSearch(v){filterSearch=v;clearTimeout(_stTimer);const cl=document.getElementById('searchClear');if(cl)cl.style.display=v?'flex':'none';_stTimer=setTimeout(()=>{renderCatalogo();renderDD(v);},150);}
+function clearSearch(){filterSearch='';const inp=document.getElementById('searchInput');if(inp)inp.value='';const cl=document.getElementById('searchClear');if(cl)cl.style.display='none';document.getElementById('searchDropdown').classList.remove('open');renderCatalogo();}
+function updateFilterBtn(){const hasFilters=filterIngrs.length||filterPortataList.length||filterMaxTime>0;const btn=document.getElementById('filterBtn');if(!btn)return;if(hasFilters){btn.classList.add('filter-active');btn.classList.remove('light');btn.innerHTML='⚗️<span class="filter-dot"></span>';}else{btn.classList.remove('filter-active');btn.classList.add('light');btn.innerHTML='⚗️';}}
 function renderDD(q){
   const dd=document.getElementById('searchDropdown');
   if(!q||q.length<2){dd.classList.remove('open');return;}
@@ -439,7 +445,7 @@ function renderDD(q){
   }).join('');
   dd.classList.add('open');
 }
-function closeDD(){document.getElementById('searchDropdown').classList.remove('open');document.getElementById('searchInput').value='';filterSearch='';}
+function closeDD(){document.getElementById('searchDropdown').classList.remove('open');}
 document.addEventListener('click',e=>{if(!e.target.closest('.search-bar'))closeDD();});
 
 // CHIPS
@@ -460,8 +466,8 @@ function filterIngrList(q){const all=[...new Set(DB.flatMap(r=>(r.ingredienti||[
 function toggleIngrTag(n,el){const i=filterIngrs.indexOf(n);if(i>-1){filterIngrs.splice(i,1);el.classList.remove('sel');}else{filterIngrs.push(n);el.classList.add('sel');}}
 function togglePortataTag(p,el){const i=filterPortataList.indexOf(p);if(i>-1){filterPortataList.splice(i,1);el.classList.remove('sel');}else{filterPortataList.push(p);el.classList.add('sel');}}
 function onTimeSlider(v){filterMaxTime=parseInt(v);document.getElementById('timeVal').textContent=filterMaxTime===0?'Qualsiasi':filterMaxTime+' min';}
-function clearFilters(){filterIngrs=[];filterPortataList=[];filterMaxTime=0;filterPortata='tutte';document.querySelectorAll('.chip').forEach(c=>c.classList.remove('active'));document.querySelector('.chip').classList.add('active');closeFilter();renderCatalogo();}
-function applyFilters(){closeFilter();renderCatalogo();}
+function clearFilters(){filterIngrs=[];filterPortataList=[];filterMaxTime=0;filterPortata='tutte';document.querySelectorAll('.chip').forEach(c=>c.classList.remove('active'));document.querySelector('.chip').classList.add('active');closeFilter();updateFilterBtn();renderCatalogo();}
+function applyFilters(){closeFilter();updateFilterBtn();renderCatalogo();}
 
 // DETAIL
 let _detPorzioni=2;
@@ -680,18 +686,49 @@ async function geminiCall(key,parts){
 }
 function imgPart(d){const[m,b]=d.split(',');return{inline_data:{mime_type:m.match(/:(.*?);/)[1],data:b}};}
 
+// ── DETERMINISTIC HELLOFRESH CROP ──
+// Il retro HelloFresh ha struttura fissa: 2 colonne × 3 righe.
+// Ogni cella occupa ~1/3 dell'altezza e ~1/2 della larghezza.
+// La foto di ogni passo è nella metà SUPERIORE della cella (~45% dell'altezza cella).
+// Il retro ha anche un'intestazione in cima (~18% altezza) con ingredienti/valori.
+// Quindi le 6 celle iniziano a y≈0.18 e finiscono a y≈1.0.
+
+function getHelloFreshStepBoxes(nPassi){
+  // Struttura fissa retro HelloFresh
+  const headerH = 0.20; // intestazione ingredienti/note in cima
+  const gridH   = 1.0 - headerH;
+  const rows    = 3;
+  const cols    = 2;
+  const cellH   = gridH / rows;
+  const cellW   = 1.0 / cols;
+  const photoFrac = 0.46; // la foto occupa il 46% superiore di ogni cella
+
+  const boxes = [];
+  for(let i=0; i<Math.min(nPassi,6); i++){
+    const row = Math.floor(i / cols);
+    const col = i % cols;
+    boxes.push({
+      x: col * cellW + 0.01,
+      y: headerH + row * cellH + 0.005,
+      w: cellW - 0.02,
+      h: cellH * photoFrac
+    });
+  }
+  return boxes;
+}
+
 async function startScan(){
   const key=document.getElementById('apiKeyInput').value.trim()||localStorage.getItem('geminiKey');
   if(!key){showToast('⚠️ Inserisci la Gemini API key');return;}
   localStorage.setItem('geminiKey',key);
   closeScan();
   try{
-    // STEP 1: dati testuali
+    // ── STEP 1: estrai dati testuali ──
     showLoading('📖 Lettura scheda…','Estrazione dati, ingredienti e passi');
     const p1=[imgPart(scanData.A)];
     if(scanData.B)p1.push(imgPart(scanData.B));
     p1.push({text:`Sei un esperto cuoco italiano. Analizza questa scheda ricetta HelloFresh.
-FRONTE: grande foto piatto + titolo + tempo totale. RETRO: lista ingredienti con 2 colonne (2 pers / 4 pers) + passi numerati (solitamente 6) con foto quadrata per ogni passo.
+FRONTE: grande foto piatto + titolo + tempo totale. RETRO: lista ingredienti con 2 colonne (2 pers / 4 pers) + passi numerati con foto per ogni passo.
 
 Restituisci SOLO JSON puro (nessun markdown) con questa struttura:
 {
@@ -707,53 +744,42 @@ Restituisci SOLO JSON puro (nessun markdown) con questa struttura:
   "strumenti":["padella","pentola","colino","mestolo","tagliere","coltello"],
   "note":"..."
 }
-REGOLE IMPORTANTI:
-- ingredienti: registra entrambe le colonne (quantita=2 pers, quantita4=4 pers)
-- tempoPrep: stima il tempo di preparazione a freddo (taglio, pesatura ingredienti)
-- tempoCottura: stima il tempo di cottura effettivo dagli step
-- strumenti: elenca TUTTI gli utensili necessari dedotti dagli step
-Solo JSON puro.`});
+REGOLE: ingredienti = entrambe le colonne; tempoPrep = preparazione a freddo; tempoCottura = cottura effettiva; strumenti = tutti gli utensili dagli step. Solo JSON puro.`});
     const t1=await geminiCall(key,p1);
     let extracted;
     try{extracted=JSON.parse(t1);}catch{throw new Error('Risposta non valida. Riprova con foto più nitide.');}
 
-    // STEP 2: coordinate foto
-    showLoading('✂️ Ritaglio foto…','Identificazione foto piatto e passi');
-    const imgs=[scanData.A,scanData.B].filter(Boolean);
-    const p2=[imgPart(scanData.A)];
-    if(scanData.B)p2.push(imgPart(scanData.B));
-    const nPassi=(extracted.passi||[]).length;
-    p2.push({text:`Analizza le immagini di questa scheda ricetta HelloFresh.
-img:0 = FRONTE: grande foto piatto in alto-sinistra, testo/titolo a destra, icone ingredienti in basso.
-${scanData.B?`img:1 = RETRO: griglia 2 colonne × 3 righe = 6 blocchi. Ogni blocco ha una foto quadrata in ALTO e testo sotto.`:''}
-
-Restituisci SOLO JSON puro:
-{
-  "piatto":{"img":0,"x":0.02,"y":0.0,"w":0.73,"h":0.70,"rotate":0},
-  "passi":[
-    {"img":1,"x":0.0,"y":0.0,"w":0.49,"h":0.30,"rotate":0},
-    {"img":1,"x":0.51,"y":0.0,"w":0.49,"h":0.30,"rotate":0},
-    {"img":1,"x":0.0,"y":0.33,"w":0.49,"h":0.30,"rotate":0},
-    {"img":1,"x":0.51,"y":0.33,"w":0.49,"h":0.30,"rotate":0},
-    {"img":1,"x":0.0,"y":0.66,"w":0.49,"h":0.30,"rotate":0},
-    {"img":1,"x":0.51,"y":0.66,"w":0.49,"h":0.30,"rotate":0}
-  ]
-}
-IMPORTANTE:
-- "piatto": ritaglia SOLO la foto grande del piatto dal fronte. Escludi assolutamente il testo a destra e le icone in basso.
-- "passi": per ogni blocco passo, ritaglia SOLO la foto (la parte superiore del blocco), NON il testo sotto. L'array deve avere esattamente ${nPassi} elementi in ordine (passo 1 → 6, da sinistra a destra, dall'alto in basso).
-- x,y,w,h: coordinate normalizzate 0.0-1.0 rispetto all'immagine indicata in "img"
-- rotate: gradi per raddrizzare (quasi sempre 0)
-Solo JSON puro.`});
-    let boxes=null;
-    try{const t2=await geminiCall(key,p2);boxes=JSON.parse(t2);}catch(e){console.warn('Crop error',e);}
-
-    // STEP 3: crop
+    // ── STEP 2: crop copertina (solo fronte, chiediamo solo il box del piatto) ──
+    showLoading('✂️ Ritaglio copertina…','Identificazione foto piatto');
     let fotoUrl=scanData.A;
-    if(boxes?.piatto){try{fotoUrl=await cropBox(imgs[boxes.piatto.img]||scanData.A,boxes.piatto,boxes.piatto.rotate||0);}catch(e){}}
+    try{
+      const pCover=[imgPart(scanData.A),{text:`Questa è la FRONTE di una scheda ricetta HelloFresh in formato verticale (portrait).
+La foto grande del piatto finito occupa la parte SINISTRA della card (circa i 2/3 sinistri) e i 3/4 superiori dell'altezza.
+A destra c'è il testo verticale del titolo. In basso ci sono icone piccole degli ingredienti.
+
+Restituisci SOLO questo JSON con le coordinate della foto del piatto (non includere il testo a destra né le icone in basso):
+{"x":0.0,"y":0.0,"w":0.74,"h":0.73}
+Aggiusta leggermente i valori in base a quello che vedi, ma rimani vicino a questi. Solo JSON puro.`}];
+      const tCover=await geminiCall(key,pCover);
+      const box=JSON.parse(tCover);
+      if(box.x>=0&&box.y>=0&&box.w>0.2&&box.h>0.2){
+        fotoUrl=await cropBox(scanData.A,box,0);
+      }
+    }catch(e){console.warn('Cover crop failed, using full image',e);}
+
+    // ── STEP 3: crop deterministico foto passi ──
+    showLoading('✂️ Ritaglio foto passi…','Estrazione foto da griglia retro');
+    const nPassi=(extracted.passi||[]).length;
     const passiConFoto=await Promise.all((extracted.passi||[]).map(async(p,i)=>{
-      const box=boxes?.passi?.[i];let foto=null;
-      if(box&&imgs[box.img]){try{foto=await cropBox(imgs[box.img],box,box.rotate||0);}catch(e){}}
+      let foto=null;
+      if(scanData.B && i<6){
+        const stepBoxes=getHelloFreshStepBoxes(nPassi);
+        const box=stepBoxes[i];
+        if(box){
+          try{foto=await cropBox(scanData.B,box,0);}
+          catch(e){foto=null;}
+        }
+      }
       return{testo:p.testo||p,fotoUrl:foto};
     }));
 
