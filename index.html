@@ -199,6 +199,8 @@ textarea.fi{resize:none;min-height:72px;line-height:1.5}
 .loading-sub{font-size:13px;color:var(--text3)}
 .toast{position:fixed;bottom:calc(var(--tab-h) + env(safe-area-inset-bottom,0px) + 12px);left:50%;transform:translateX(-50%) translateY(10px);background:var(--accent);color:white;padding:11px 20px;border-radius:50px;font-size:14px;font-weight:500;opacity:0;transition:all .28s;z-index:9999;white-space:nowrap;box-shadow:0 6px 20px rgba(0,0,0,.15);pointer-events:none}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+@keyframes voicePulse{0%,100%{transform:scale(1);box-shadow:0 0 0 0 rgba(200,82,42,.4)}50%{transform:scale(1.08);box-shadow:0 0 0 12px rgba(200,82,42,0)}}
+.recording{animation:voicePulse 1.2s ease-in-out infinite!important;background:rgba(200,82,42,.12)!important;border-color:var(--accent2)!important}
 </style>
 </head>
 <body>
@@ -210,7 +212,6 @@ textarea.fi{resize:none;min-height:72px;line-height:1.5}
         <div style="display:flex;gap:8px">
           <button class="tb-btn light" id="filterBtn" onclick="openFilter()">⚗️</button>
           <button class="tb-btn light" onclick="document.getElementById('setupOverlay').classList.add('open')">⚙️</button>
-          <button class="tb-btn dark" onclick="openScan()">📷</button>
         </div>
       </div>
       <div class="search-bar">
@@ -240,11 +241,68 @@ textarea.fi{resize:none;min-height:72px;line-height:1.5}
     <button class="tab active" id="tab-catalogo" onclick="goPage('catalogo',this)"><span class="tab-ico">🍽️</span><span class="tab-lbl">Catalogo</span></button>
     <button class="tab" id="tab-preferiti" onclick="goPage('preferiti',this)"><span class="tab-ico">❤️</span><span class="tab-lbl">Preferiti</span></button>
   </nav>
-  <button class="fab" id="mainFab" onclick="openAdd()">＋</button>
+  <button class="fab" id="mainFab" onclick="openNewRecipeMenu()">＋</button>
 </div>
 
 <div class="loading-cover" id="loadingCover"><div class="spin-ring"></div><div class="loading-msg" id="loadingMsg">Caricamento…</div><div class="loading-sub" id="loadingSub"></div></div>
 <div class="toast" id="toast"></div>
+
+<!-- NUOVA RICETTA: scelta modalità -->
+<div class="overlay" id="newRecipeOverlay" onclick="closeNewRecipeMenu()" style="align-items:flex-end">
+  <div class="sheet" onclick="event.stopPropagation()">
+    <div class="sheet-handle"></div>
+    <div style="padding:20px 20px 4px">
+      <div style="font-family:var(--fd);font-size:20px;font-weight:600;margin-bottom:4px">Nuova Ricetta</div>
+      <div style="font-size:13px;color:var(--text3);margin-bottom:20px">Come vuoi aggiungere la ricetta?</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px;padding:0 20px;padding-bottom:calc(env(safe-area-inset-bottom,0px)+28px)">
+      <button class="btn btn-dark" onclick="closeNewRecipeMenu();openScan()" style="justify-content:flex-start;gap:16px;font-size:15px;padding:16px 20px">
+        <span style="font-size:28px">📷</span>
+        <div style="text-align:left"><div style="font-weight:700">Scansiona scheda</div><div style="font-size:12px;opacity:.7;font-weight:400;margin-top:2px">Fotografa una scheda ricetta</div></div>
+      </button>
+      <button class="btn" onclick="closeNewRecipeMenu();openAdd()" style="justify-content:flex-start;gap:16px;font-size:15px;padding:16px 20px;background:var(--bg2);border:1.5px solid var(--border)">
+        <span style="font-size:28px">✍️</span>
+        <div style="text-align:left"><div style="font-weight:700">Inserisci manualmente</div><div style="font-size:12px;color:var(--text2);font-weight:400;margin-top:2px">Compila i campi a mano o con la voce</div></div>
+      </button>
+      <button class="btn" onclick="closeNewRecipeMenu()" style="background:none;color:var(--text3);font-size:15px;padding:12px">Annulla</button>
+    </div>
+  </div>
+</div>
+
+<!-- REGISTRAZIONE VOCALE -->
+<div class="overlay" id="voiceOverlay">
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <span class="sheet-title">🎙️ Aggiungi con la voce</span>
+      <button class="sheet-close" onclick="closeVoice()">✕</button>
+    </div>
+    <div class="sheet-body" style="padding:20px">
+      <div id="voiceInfo" class="info-box" style="margin:0 0 16px">
+        Parla liberamente: descrivi il nome della ricetta, gli ingredienti con le dosi, i passaggi di preparazione e qualsiasi altra informazione. Quando hai finito premi Stop.
+      </div>
+      <!-- Stato registrazione -->
+      <div id="voiceStatus" style="text-align:center;padding:24px 0">
+        <div id="voicePulse" style="width:80px;height:80px;border-radius:50%;background:var(--bg2);border:3px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:36px;margin:0 auto 16px;transition:all .3s">🎙️</div>
+        <div id="voiceStatusText" style="font-size:15px;font-weight:600;color:var(--text2)">Premi Start per iniziare</div>
+        <div id="voiceTimer" style="font-size:13px;color:var(--text3);margin-top:4px;display:none">0:00</div>
+      </div>
+      <!-- Trascrizione live -->
+      <div id="voiceTranscriptWrap" style="display:none;margin-bottom:16px">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:8px">Trascrizione</div>
+        <div id="voiceTranscript" style="background:var(--bg2);border-radius:var(--r-xs);padding:12px;font-size:14px;line-height:1.6;color:var(--text);min-height:60px;max-height:160px;overflow-y:auto"></div>
+      </div>
+      <div style="display:flex;gap:10px">
+        <button class="btn btn-dark" id="voiceStartBtn" onclick="startVoice()" style="flex:1">🎙️ Start</button>
+        <button class="btn btn-danger" id="voiceStopBtn" onclick="stopVoice()" style="flex:1;display:none">⏹ Stop</button>
+      </div>
+      <div id="voiceProcessBtn" style="display:none;margin-top:10px">
+        <button class="btn btn-orange" onclick="processVoice()" style="width:100%">✨ Elabora con Gemini</button>
+        <button class="btn btn-outline" onclick="retryVoice()" style="width:100%;margin-top:8px">🔄 Registra di nuovo</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <div class="ctx-menu" id="ctxMenu">
   <div class="ctx-item" onclick="ctxAction('edit')">✏️ Modifica</div>
@@ -547,6 +605,12 @@ function buildForm(r){
   const ingrs=r.ingredienti?.length?r.ingredienti:[{nome:'',quantita:'',quantita4:'',unita:''}];
   const passi=r.passi?.length?r.passi:[{testo:'',fotoUrl:null}];
   document.getElementById('addBody').innerHTML=`
+    <!-- VOICE BANNER -->
+    <div style="padding:16px 20px 0">
+      <button onclick="openVoice(false)" style="width:100%;padding:14px 20px;border-radius:var(--r-sm);border:1.5px dashed var(--accent2);background:rgba(200,82,42,0.06);font-family:var(--fb);font-size:14px;font-weight:600;color:var(--accent2);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;transition:all .2s" id="voiceMainBtn">
+        🎙️ Compila con la voce
+      </button>
+    </div>
     <div class="fsec"><div class="fsec-title">Foto Principale</div>
       <div class="photo-upload ${r.fotoUrl?'has-photo':''}" id="mainPhotoSlot" onclick="pickMainPhoto()">
         <img id="mainPhotoImg" src="${r.fotoUrl||''}" style="${r.fotoUrl?'':'display:none'}">
@@ -590,6 +654,9 @@ function buildForm(r){
     </div>
     <div class="fsec"><div class="fsec-title">Note</div><div class="field"><textarea class="fi" id="f_note" placeholder="Consigli, varianti…">${r.note||''}</textarea></div></div>
     <div class="form-actions">
+      <button onclick="openVoice(true)" style="width:100%;padding:13px 20px;border-radius:var(--r-sm);border:1.5px dashed var(--border);background:transparent;font-family:var(--fb);font-size:14px;font-weight:500;color:var(--text2);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:2px">
+        🎙️ Aggiungi info mancanti con la voce
+      </button>
       <button class="btn btn-dark" onclick="saveRecipe()">💾 Salva Ricetta</button>
       ${editId?`<button class="btn btn-danger" onclick="delRecipe('${editId}')">🗑️ Elimina</button>`:''}
     </div>`;
@@ -840,6 +907,133 @@ Aggiusta leggermente i valori in base a quello che vedi, ma rimani vicino a ques
     hideLoading();
     openAdd({...extracted,passi:passiConFoto,fotoUrl,fav:false,createdAt:Date.now()});
   }catch(err){hideLoading();showToast('❌ '+(err.message||'Errore scansione'));}
+}
+
+// NEW RECIPE MENU
+function openNewRecipeMenu(){document.getElementById('newRecipeOverlay').classList.add('open');}
+function closeNewRecipeMenu(){document.getElementById('newRecipeOverlay').classList.remove('open');}
+
+// VOICE INPUT
+let _voiceRec=null,_voiceFinal='',_voiceTranscript='',_voiceIncremental=false,_voiceTimerInt=null,_voiceSecs=0;
+
+function openVoice(incremental){
+  _voiceIncremental=incremental;_voiceFinal='';_voiceTranscript='';_voiceSecs=0;
+  document.getElementById('voicePulse').textContent='🎙️';
+  document.getElementById('voicePulse').className='';
+  document.getElementById('voicePulse').style.cssText='width:80px;height:80px;border-radius:50%;background:var(--bg2);border:3px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:36px;margin:0 auto 16px;transition:all .3s';
+  document.getElementById('voiceStatusText').textContent='Premi Start per iniziare';
+  document.getElementById('voiceTimer').style.display='none';
+  document.getElementById('voiceTranscriptWrap').style.display='none';
+  document.getElementById('voiceTranscript').textContent='';
+  document.getElementById('voiceStartBtn').style.display='flex';
+  document.getElementById('voiceStopBtn').style.display='none';
+  document.getElementById('voiceProcessBtn').style.display='none';
+  document.getElementById('voiceInfo').textContent=incremental
+    ?'Aggiungi informazioni mancanti: ingredienti dimenticati, passi extra, dosi per 4, strumenti, note…'
+    :'Parla liberamente: nome, ingredienti con dosi, passaggi, tempi, difficoltà, strumenti. Poi premi Stop.';
+  document.getElementById('voiceOverlay').classList.add('open');
+}
+function closeVoice(){stopVoice();document.getElementById('voiceOverlay').classList.remove('open');}
+
+function startVoice(){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){showToast('⚠️ Browser non supportato — usa Chrome');return;}
+  _voiceFinal='';
+  _voiceRec=new SR();_voiceRec.lang='it-IT';_voiceRec.continuous=true;_voiceRec.interimResults=true;
+  _voiceRec.onresult=e=>{
+    let interim='';
+    for(let i=e.resultIndex;i<e.results.length;i++){
+      if(e.results[i].isFinal)_voiceFinal+=e.results[i][0].transcript+' ';
+      else interim+=e.results[i][0].transcript;
+    }
+    const full=(_voiceFinal+interim).trim();
+    document.getElementById('voiceTranscript').textContent=full;
+    document.getElementById('voiceTranscript').scrollTop=9999;
+  };
+  _voiceRec.onerror=e=>{if(e.error==='not-allowed'){showToast('⚠️ Permesso microfono negato');closeVoice();}};
+  _voiceRec.onend=()=>{if(_voiceRec?._active){try{_voiceRec.start();}catch(e){}}};
+  _voiceRec._active=true;
+  _voiceRec.start();
+  const pulse=document.getElementById('voicePulse');
+  pulse.textContent='🔴';pulse.classList.add('recording');
+  document.getElementById('voiceStatusText').textContent='Sto ascoltando…';
+  document.getElementById('voiceTimer').style.display='block';
+  document.getElementById('voiceTranscriptWrap').style.display='block';
+  document.getElementById('voiceStartBtn').style.display='none';
+  document.getElementById('voiceStopBtn').style.display='flex';
+  _voiceSecs=0;
+  _voiceTimerInt=setInterval(()=>{_voiceSecs++;const m=Math.floor(_voiceSecs/60),s=(_voiceSecs%60).toString().padStart(2,'0');document.getElementById('voiceTimer').textContent=`${m}:${s}`;},1000);
+}
+
+function stopVoice(){
+  if(_voiceRec){_voiceRec._active=false;try{_voiceRec.stop();}catch(e){}_voiceRec=null;}
+  clearInterval(_voiceTimerInt);
+  const pulse=document.getElementById('voicePulse');
+  pulse.textContent='✅';pulse.classList.remove('recording');
+  const t=_voiceFinal.trim();
+  if(!t){showToast('⚠️ Nessun audio rilevato');return;}
+  document.getElementById('voiceStatusText').textContent='Registrazione completata';
+  document.getElementById('voiceStopBtn').style.display='none';
+  document.getElementById('voiceProcessBtn').style.display='block';
+  _voiceTranscript=t;
+}
+function retryVoice(){_voiceTranscript='';_voiceFinal='';startVoice();}
+
+async function processVoice(){
+  const t=_voiceTranscript.trim();if(!t){showToast('⚠️ Nessuna trascrizione');return;}
+  const key=localStorage.getItem('geminiKey');
+  if(!key){showToast('⚠️ Gemini API key mancante — salvala nella sezione 📷');closeVoice();return;}
+  closeVoice();
+  showLoading('🧠 Elaborazione voce…','Gemini struttura la ricetta');
+
+  let currentState={};
+  if(_voiceIncremental){
+    currentState={
+      nome:document.getElementById('f_nome')?.value.trim()||'',
+      portata:document.getElementById('f_portata')?.value||'',
+      descrizione:document.getElementById('f_desc')?.value.trim()||'',
+      tempoPrep:document.getElementById('f_prep')?.value.trim()||'',
+      tempoCottura:document.getElementById('f_cook')?.value.trim()||'',
+      porzioni2:document.getElementById('f_porz2')?.value.trim()||'',
+      difficolta:document.getElementById('f_diff')?.value||'',
+      note:document.getElementById('f_note')?.value.trim()||'',
+      strumenti:document.getElementById('f_strum')?.value.trim()||''
+    };
+    const ingrs=[];document.querySelectorAll('#ingrList .ingr-row').forEach((row,i)=>{const n=row.querySelector('.ingr-nome')?.value.trim()||'';if(n)ingrs.push(`${n}: ${row.querySelector('.ingr-qta')?.value||''} ${document.getElementById(`unitSel_${i}`)?.value||''}`);});currentState.ingr_esistenti=ingrs.join(', ');
+    const steps=[];document.querySelectorAll('#passiList .step-wrap textarea').forEach((ta,i)=>{if(ta.value.trim())steps.push(`${i+1}. ${ta.value.trim()}`);});currentState.passi_esistenti=steps.join(' | ');
+  }
+
+  try{
+    const prompt=_voiceIncremental
+      ?`Sei un assistente cuoco italiano. L'utente sta INTEGRANDO una ricetta con nuove informazioni vocali.
+STATO ATTUALE: Nome="${currentState.nome}", Portata="${currentState.portata}", TempoPre="${currentState.tempoPrep}", TempoCottura="${currentState.tempoCottura}", Porzioni="${currentState.porzioni2}", Difficoltà="${currentState.difficolta}", Ingredienti esistenti: ${currentState.ingr_esistenti||'nessuno'}, Passi esistenti: ${currentState.passi_esistenti||'nessuno'}, Strumenti: ${currentState.strumenti||'nessuno'}, Note: "${currentState.note}"
+NUOVO AUDIO: "${t}"
+Estrai SOLO le info NUOVE o MANCANTI. Restituisci SOLO JSON puro:
+{"nome":null,"portata":null,"descrizione":null,"tempoPrep":null,"tempoCottura":null,"porzioni2":null,"difficolta":null,"nuovi_ingredienti":[{"nome":"","quantita":"","quantita4":"","unita":""}],"nuovi_passi":[{"testo":"","fotoUrl":null}],"strumenti_aggiuntivi":[],"note":null}
+null = non modificare. Solo JSON puro.`
+      :`Sei un assistente cuoco italiano. L'utente ha descritto una ricetta a voce. Struttura tutto nei campi corretti.
+AUDIO: "${t}"
+Restituisci SOLO JSON puro:
+{"nome":"","portata":"antipasto|primo|secondo|contorno|dessert|bevanda","descrizione":"","tempoPrep":"","tempoCottura":"","porzioni2":"","difficolta":"facile|medio|difficile","ingredienti":[{"nome":"","quantita":"","quantita4":"","unita":""}],"passi":[{"testo":"","fotoUrl":null}],"strumenti":[],"note":""}
+Solo JSON puro.`;
+
+    const txt=await geminiCall(key,[{text:prompt}]);
+    let data;try{data=JSON.parse(txt);}catch{throw new Error('Risposta non valida');}
+    hideLoading();
+    if(_voiceIncremental){mergeVoiceIntoForm(data);showToast('✅ Informazioni aggiunte!');}
+    else{openAdd(data);showToast('✅ Ricetta strutturata dalla voce!');}
+  }catch(err){hideLoading();showToast('❌ '+(err.message||'Errore'));}
+}
+
+function mergeVoiceIntoForm(data){
+  [['f_nome','nome'],['f_desc','descrizione'],['f_prep','tempoPrep'],['f_cook','tempoCottura'],['f_porz2','porzioni2'],['f_note','note']].forEach(([id,k])=>{
+    if(data[k]!=null){const el=document.getElementById(id);if(el&&!el.value.trim())el.value=data[k];}
+  });
+  if(data.portata){const el=document.getElementById('f_portata');if(el)el.value=data.portata;}
+  if(data.difficolta){const el=document.getElementById('f_diff');if(el)el.value=data.difficolta;}
+  if(data.nuovi_ingredienti?.length){const l=document.getElementById('ingrList');data.nuovi_ingredienti.forEach(ing=>{l.insertAdjacentHTML('beforeend',ingrRow(ing,l.children.length));});}
+  if(data.nuovi_passi?.length){const l=document.getElementById('passiList');data.nuovi_passi.forEach(p=>{l.insertAdjacentHTML('beforeend',stepRow(p,l.children.length));});document.querySelectorAll('#passiList .step-num').forEach((b,i)=>b.textContent=i+1);}
+  if(data.strumenti_aggiuntivi?.length){const el=document.getElementById('f_strum');if(el){const ex=el.value.trim();el.value=ex?`${ex}, ${data.strumenti_aggiuntivi.join(', ')}`:data.strumenti_aggiuntivi.join(', ');}}
 }
 
 // UTILS
