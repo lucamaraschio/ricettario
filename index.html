@@ -347,18 +347,31 @@ textarea.fi{resize:none;min-height:72px;line-height:1.5}
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import { getDatabase, ref, set, onValue, remove } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 let _db=null;
 const C={apiKey:"AIzaSyDhJ2I9M4NT4JE3dyQ5zf4KOsU0GWSHJNc",authDomain:"ricettario-de1ce.firebaseapp.com",databaseURL:"https://ricettario-de1ce-default-rtdb.europe-west1.firebasedatabase.app",projectId:"ricettario-de1ce",storageBucket:"ricettario-de1ce.firebasestorage.app",messagingSenderId:"366955327796",appId:"1:366955327796:web:5cc2c8d85fe9995734b561"};
 try{
   const app=initializeApp(C,'ric');
   _db=getDatabase(app);
-  window._fb={
-    ready:()=>!!_db,
-    listen(cb){onValue(ref(_db,'ricette'),s=>{const v=s.val();const a=v?Object.values(v):[];a.sort((x,y)=>(y.createdAt||0)-(x.createdAt||0));cb(a);});},
-    async save(r){await set(ref(_db,`ricette/${r.id}`),r);},
-    async del(id){await remove(ref(_db,`ricette/${id}`));}
-  };
-  window._fb.listen(r=>window._onFbData(r));
+  const auth=getAuth(app);
+
+  // Login anonimo automatico — nessuna azione richiesta dall'utente
+  onAuthStateChanged(auth, user=>{
+    if(user){
+      // Autenticato: avvia ascolto database
+      window._fb={
+        ready:()=>!!_db,
+        listen(cb){onValue(ref(_db,'ricette'),s=>{const v=s.val();const a=v?Object.values(v):[];a.sort((x,y)=>(y.createdAt||0)-(x.createdAt||0));cb(a);});},
+        async save(r){await set(ref(_db,`ricette/${r.id}`),r);},
+        async del(id){await remove(ref(_db,`ricette/${id}`));}
+      };
+      window._fb.listen(r=>window._onFbData(r));
+    }
+  });
+
+  // Avvia login anonimo
+  signInAnonymously(auth).catch(e=>console.error('Auth error:',e));
+
 }catch(e){console.error(e);}
 </script>
 
