@@ -5,6 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Ricettario">
+<meta name="theme-color" content="#2C2C2C">
+<meta name="description" content="Il tuo ricettario personale">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.png">
 <title>Ricettario</title>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@300;400;600;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -618,6 +623,9 @@ function buildForm(r){
         <button class="photo-change-btn" style="${r.fotoUrl?'':'display:none'}" id="mainPhotoCBtn" onclick="event.stopPropagation();pickMainPhoto()">Cambia</button>
       </div>
       <input type="file" id="mainPhotoFile" accept="image/*" onchange="onMainPhoto(event)" style="display:none">
+      <button onclick="generateAIPhoto()" style="width:100%;margin-top:8px;padding:11px 16px;border-radius:var(--r-xs);border:1.5px solid var(--border);background:var(--white);font-family:var(--fb);font-size:13px;font-weight:500;color:var(--text2);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:all .2s" id="aiPhotoBtn">
+        ✨ Cerca foto automatica
+      </button>
     </div>
     <div class="fsec"><div class="fsec-title">Informazioni Base</div>
       <div class="field"><label>Nome *</label><input class="fi" id="f_nome" placeholder="Es. Risotto alla Milanese" value="${r.nome||''}"></div>
@@ -888,21 +896,9 @@ Aggiusta leggermente i valori in base a quello che vedi, ma rimani vicino a ques
       }
     }catch(e){console.warn('Cover crop failed, using full image',e);}
 
-    // ── STEP 3: crop deterministico foto passi ──
-    showLoading('✂️ Ritaglio foto passi…','Estrazione foto da griglia retro');
+    // ── STEP 3: passi senza foto (l'utente le aggiunge manualmente) ──
     const nPassi=(extracted.passi||[]).length;
-    const passiConFoto=await Promise.all((extracted.passi||[]).map(async(p,i)=>{
-      let foto=null;
-      if(scanData.B && i<6){
-        const stepBoxes=getHelloFreshStepBoxes(nPassi);
-        const box=stepBoxes[i];
-        if(box){
-          try{foto=await cropBox(scanData.B,box,0);}
-          catch(e){foto=null;}
-        }
-      }
-      return{testo:p.testo||p,fotoUrl:foto};
-    }));
+    const passiConFoto=(extracted.passi||[]).map(p=>({testo:p.testo||p,fotoUrl:null}));
 
     hideLoading();
     openAdd({...extracted,passi:passiConFoto,fotoUrl,fav:false,createdAt:Date.now()});
@@ -1036,12 +1032,127 @@ function mergeVoiceIntoForm(data){
   if(data.strumenti_aggiuntivi?.length){const el=document.getElementById('f_strum');if(el){const ex=el.value.trim();el.value=ex?`${ex}, ${data.strumenti_aggiuntivi.join(', ')}`:data.strumenti_aggiuntivi.join(', ');}}
 }
 
+// ════════════════════════════════
+// AI PHOTO GENERATION
+// ════════════════════════════════
+async function generateAIPhoto(){
+  const nome=document.getElementById('f_nome')?.value.trim();
+  if(!nome){showToast('⚠️ Inserisci prima il nome della ricetta');return;}
+
+  const btn=document.getElementById('aiPhotoBtn');
+  if(btn){btn.textContent='⏳ Ricerca in corso…';btn.disabled=true;}
+
+  // Build smart search query: recipe name + top 3 ingredients
+  const ingrs=[];
+  document.querySelectorAll('#ingrList .ingr-nome').forEach(el=>{if(el.value.trim())ingrs.push(el.value.trim());});
+  const portata=document.getElementById('f_portata')?.value||'';
+  // Use Gemini to generate the best English search query for the photo
+  const key=localStorage.getItem('geminiKey');
+  let query=nome; // fallback query
+  if(key){
+    try{
+      const promptQ=`Given this Italian recipe named "${nome}" with ingredients: ${ingrs.slice(0,5).join(', ')||'not specified'}, write ONLY a short English search query (3-6 words) for finding a professional food photo of this dish on Unsplash. Output only the query, nothing else.`;
+      const qRes=await geminiCall(key,[{text:promptQ}]);
+      if(qRes&&qRes.length<80) query=qRes.replace(/['"]/g,'').trim();
+    }catch(e){/* use fallback */}
+  }
+
+  try{
+    // 1. Try Unsplash
+    const uQuery=encodeURIComponent(query+' food photography');
+    const uRes=await fetch(`https://api.unsplash.com/search/photos?query=${uQuery}&per_page=3&orientation=squarish&client_id=_q2QBdHE5HjT_a8VWl2MoRfcVlGoxC5Z2KFnHWkZQtQ`);
+    if(uRes.ok){
+      const uData=await uRes.json();
+      const photo=uData.results?.[0];
+      if(photo?.urls?.regular){
+        await loadAndSetPhoto(photo.urls.regular,'📸 Foto trovata su Unsplash!');
+        return;
+      }
+    }
+
+    // 2. Fallback: Pexels (free, no key for basic embed URL)
+    const pQuery=encodeURIComponent(query);
+    const pRes=await fetch(`https://api.pexels.com/v1/search?query=${pQuery}&per_page=1&orientation=square`,{
+      headers:{'Authorization':'7qiKj8lmFdkBnVxfMhcJLyePRsXYoDuaGpCrtiONwAZQbUHvESWT'}
+    });
+    if(pRes.ok){
+      const pData=await pRes.json();
+      const url=pData.photos?.[0]?.src?.medium;
+      if(url){
+        await loadAndSetPhoto(url,'📸 Foto trovata su Pexels!');
+        return;
+      }
+    }
+
+    showToast('⚠️ Nessuna foto trovata. Aggiungila manualmente.');
+  }catch(e){
+    console.warn('Photo search error',e);
+    showToast('⚠️ Errore ricerca foto. Riprova o aggiungi manualmente.');
+  }finally{
+    if(btn){btn.textContent='✨ Cerca foto automatica';btn.disabled=false;}
+  }
+}
+
+async function loadAndSetPhoto(url, toastMsg){
+  // Fetch and convert to base64 so it's stored locally with the recipe
+  try{
+    const res=await fetch(url);
+    if(!res.ok) throw new Error('fetch fail');
+    const blob=await res.blob();
+    const reader=new FileReader();
+    reader.onload=ev=>{setMainPhoto(ev.target.result);showToast(toastMsg);};
+    reader.readAsDataURL(blob);
+  }catch(e){
+    // If CORS blocks the download, use the URL directly as preview
+    setMainPhotoUrl(url);
+    showToast(toastMsg+' (URL esterno)');
+  }
+}
+
+function setMainPhotoUrl(url){
+  _formFotoUrl=url;
+  const slot=document.getElementById('mainPhotoSlot');
+  if(slot)slot.classList.add('has-photo');
+  const img=document.getElementById('mainPhotoImg');
+  if(img){img.src=url;img.style.display='block';}
+  const btn=document.getElementById('mainPhotoCBtn');
+  if(btn)btn.style.display='block';
+}
+
+function setMainPhoto(dataUrl){
+  _formFotoUrl=dataUrl;
+  const slot=document.getElementById('mainPhotoSlot');
+  if(slot)slot.classList.add('has-photo');
+  const img=document.getElementById('mainPhotoImg');
+  if(img){img.src=dataUrl;img.style.display='block';}
+  const btn=document.getElementById('mainPhotoCBtn');
+  if(btn)btn.style.display='block';
+}
+
+// PWA SETUP (manifest + service worker, icona SVG inline)
+function setupPWA(){
+  // Icona SVG inline — nessun file PNG esterno
+  const ico=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192"><rect width="192" height="192" rx="38" fill="#F7F5F2"/><text y="148" x="96" text-anchor="middle" font-size="130" font-family="serif">&#127860;</text></svg>`;
+  const icoUrl=URL.createObjectURL(new Blob([ico],{type:'image/svg+xml'}));
+  const el=document.getElementById('appIcon');if(el)el.href=icoUrl;
+  // Manifest PWA
+  const manifest={name:'Ricettario',short_name:'Ricettario',description:'Il tuo ricettario personale',start_url:'.',display:'standalone',background_color:'#F7F5F2',theme_color:'#2C2C2C',orientation:'portrait',icons:[{src:icoUrl,sizes:'192x192',type:'image/svg+xml',purpose:'any maskable'},{src:icoUrl,sizes:'512x512',type:'image/svg+xml',purpose:'any maskable'}]};
+  const mUrl=URL.createObjectURL(new Blob([JSON.stringify(manifest)],{type:'application/json'}));
+  const ml=document.getElementById('pwaManifest');if(ml)ml.href=mUrl;
+  // Service worker
+  if('serviceWorker' in navigator){
+    const sw=`const C='ric-v2';self.addEventListener('install',e=>e.waitUntil(caches.open(C).then(c=>c.addAll(['.']).catch(()=>{}))));self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==C).map(k=>caches.delete(k))))));self.addEventListener('fetch',e=>{if(/firebasedatabase|generativelanguage|unsplash|pexels/.test(e.request.url))return;e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request).then(res=>{caches.open(C).then(c=>c.put(e.request,res.clone()));return res;}).catch(()=>caches.match('.'))));});`;
+    navigator.serviceWorker.register(URL.createObjectURL(new Blob([sw],{type:'application/javascript'}))).catch(()=>{});
+  }
+}
+
 // UTILS
 function showLoading(msg,sub){document.getElementById('loadingMsg').textContent=msg||'Caricamento…';document.getElementById('loadingSub').textContent=sub||'';document.getElementById('loadingCover').classList.add('show');}
 function hideLoading(){document.getElementById('loadingCover').classList.remove('show');}
 function showToast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2800);}
 
 // INIT
+setupPWA();
 showLoading('Connessione…','Caricamento ricette dal cloud');
 setTimeout(()=>{if(!_fbReady){hideLoading();DB=JSON.parse(localStorage.getItem('ric4')||'[]');renderCatalogo();showToast('⚠️ Offline — dati locali');}},4000);
 </script>
