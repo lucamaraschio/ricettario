@@ -265,6 +265,10 @@ textarea.fi{resize:none;min-height:72px;line-height:1.5}
         <span style="font-size:28px">📷</span>
         <div style="text-align:left"><div style="font-weight:700">Scansiona scheda</div><div style="font-size:12px;opacity:.7;font-weight:400;margin-top:2px">Fotografa una scheda ricetta</div></div>
       </button>
+      <button class="btn" onclick="closeNewRecipeMenu();openUrlImport()" style="justify-content:flex-start;gap:16px;font-size:15px;padding:16px 20px;background:var(--bg2);border:1.5px solid var(--border)">
+        <span style="font-size:28px">🔗</span>
+        <div style="text-align:left"><div style="font-weight:700">Importa da link</div><div style="font-size:12px;color:var(--text2);font-weight:400;margin-top:2px">Incolla l'URL di una ricetta online</div></div>
+      </button>
       <button class="btn" onclick="closeNewRecipeMenu();openAdd()" style="justify-content:flex-start;gap:16px;font-size:15px;padding:16px 20px;background:var(--bg2);border:1.5px solid var(--border)">
         <span style="font-size:28px">✍️</span>
         <div style="text-align:left"><div style="font-weight:700">Inserisci manualmente</div><div style="font-size:12px;color:var(--text2);font-weight:400;margin-top:2px">Compila i campi a mano o con la voce</div></div>
@@ -316,6 +320,28 @@ textarea.fi{resize:none;min-height:72px;line-height:1.5}
   <div class="ctx-item danger" onclick="ctxAction('delete')">🗑️ Elimina</div>
 </div>
 <div id="ctxBg" style="display:none;position:fixed;inset:0;z-index:799" onclick="closeCtx()"></div>
+
+<!-- URL IMPORT -->
+<div class="overlay" id="urlOverlay" onclick="if(event.target===this)closeUrlImport()">
+  <div class="sheet" onclick="event.stopPropagation()">
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <span class="sheet-title">🔗 Importa da Link</span>
+      <button class="sheet-close" onclick="closeUrlImport()">✕</button>
+    </div>
+    <div class="sheet-body" style="padding:20px">
+      <div class="info-box" style="margin:0 0 16px">
+        Incolla il link di qualsiasi sito di ricette. Gemini leggerà la pagina ed estrarrà automaticamente tutti i dati.
+      </div>
+      <div class="field" style="margin-bottom:16px">
+        <label style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:6px;display:block">URL ricetta</label>
+        <input class="fi" id="urlInput" type="url" placeholder="https://www.esempio.com/ricetta/..." style="font-size:14px">
+      </div>
+      <button class="btn btn-orange" onclick="importFromUrl()" style="width:100%">🤖 Analizza con Gemini</button>
+      <p style="font-size:12px;color:var(--text3);margin-top:10px;text-align:center">Funziona con la maggior parte dei siti di cucina</p>
+    </div>
+  </div>
+</div>
 
 <!-- SCAN -->
 <div class="overlay" id="scanOverlay">
@@ -908,6 +934,118 @@ Aggiusta leggermente i valori in base a quello che vedi, ma rimani vicino a ques
 // NEW RECIPE MENU
 function openNewRecipeMenu(){document.getElementById('newRecipeOverlay').classList.add('open');}
 function closeNewRecipeMenu(){document.getElementById('newRecipeOverlay').classList.remove('open');}
+
+// URL IMPORT
+function openUrlImport(){
+  document.getElementById('urlInput').value='';
+  document.getElementById('urlOverlay').classList.add('open');
+}
+function closeUrlImport(){document.getElementById('urlOverlay').classList.remove('open');}
+
+async function importFromUrl(){
+  const url=document.getElementById('urlInput').value.trim();
+  if(!url){showToast('⚠️ Incolla un URL valido');return;}
+  if(!url.startsWith('http')){showToast('⚠️ URL non valido');return;}
+  const key=localStorage.getItem('geminiKey');
+  if(!key){showToast('⚠️ Gemini API key mancante — configurala in Scansiona scheda');return;}
+
+  closeUrlImport();
+  showLoading('🔗 Lettura pagina…','Recupero contenuto ricetta');
+
+  try{
+    // Fetch page via CORS proxy
+    let html='';
+    const proxies=[
+      `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
+      `https://corsproxy.io/?${encodeURIComponent(url)}`
+    ];
+    for(const proxy of proxies){
+      try{
+        const r=await fetch(proxy);
+        if(!r.ok)continue;
+        const d=await r.json().catch(()=>null)||await r.text();
+        html=typeof d==='object'?d.contents:d;
+        if(html&&html.length>500)break;
+      }catch(e){continue;}
+    }
+    if(!html||html.length<200)throw new Error('Impossibile leggere la pagina. Prova a copiare il testo manualmente.');
+
+    // Strip HTML to plain text (keep structure)
+    const tmp=document.createElement('div');
+    tmp.innerHTML=html;
+    // Remove scripts, styles, navs
+    tmp.querySelectorAll('script,style,nav,header,footer,aside,iframe,noscript').forEach(el=>el.remove());
+    const text=tmp.innerText||tmp.textContent||'';
+    // Truncate to ~8000 chars to stay within Gemini limits
+    const excerpt=text.replace(/\s+/g,' ').trim().slice(0,8000);
+
+    showLoading('🤖 Analisi Gemini…','Estrazione ingredienti e passi');
+
+    const prompt=`Sei un esperto cuoco. Analizza il seguente testo estratto da una pagina web di ricette e restituisci SOLO JSON puro (nessun markdown, nessuna spiegazione) con questa struttura esatta:
+{
+  "nome":"Nome ricetta",
+  "portata":"antipasto|primo|secondo|contorno|dessert|bevanda",
+  "descrizione":"Breve descrizione appetitosa (1-2 frasi)",
+  "tempoPrep":"X min",
+  "tempoCottura":"X min",
+  "porzioni2":"numero porzioni",
+  "difficolta":"facile|medio|difficile",
+  "ingredienti":[{"nome":"ingrediente","quantita":"dose","quantita4":"","unita":"g|ml|cucchiai|ecc"}],
+  "passi":[{"testo":"testo passo completo e dettagliato","fotoUrl":null}],
+  "strumenti":["strumento1","strumento2"],
+  "note":"varianti o consigli utili"
+}
+REGOLE IMPORTANTI:
+- Se la procedura è un unico testo, dividila in step logici (massimo 8-10 step, ognuno con un'azione chiara)
+- Ogni step deve essere auto-contenuto e descrivere UNA sola azione
+- Se non trovi un'informazione, usa stringa vuota "" o array vuoto []
+- Per portata: inferisci dal nome/descrizione, default "secondo"
+- Per difficoltà: inferisci dalla complessità, default "facile"
+- Strumenti: deducili dalla ricetta anche se non esplicitati
+
+TESTO PAGINA:
+${excerpt}`;
+
+    const raw=await geminiCall(key,[{text:prompt}]);
+    let extracted;
+    try{extracted=JSON.parse(raw);}
+    catch(e){
+      // Try to extract JSON from response
+      const match=raw.match(/\{[\s\S]*\}/);
+      if(match)extracted=JSON.parse(match[0]);
+      else throw new Error('Risposta Gemini non valida. Riprova.');
+    }
+
+    // Try to fetch the main image from the page
+    let fotoUrl=null;
+    try{
+      const imgMatch=html.match(/<meta[^>]+(?:og:image|twitter:image)[^>]+content=["']([^"']+)["']/i)||
+                     html.match(/content=["']([^"']+)["'][^>]+(?:og:image|twitter:image)/i);
+      if(imgMatch?.[1]){
+        const imgUrl=imgMatch[1].startsWith('http')?imgMatch[1]:new URL(imgMatch[1],url).href;
+        // Try to load it
+        const imgR=await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(imgUrl)}`);
+        if(imgR.ok){
+          const imgD=await imgR.json();
+          if(imgD.contents&&imgD.contents.startsWith('data:image')){fotoUrl=imgD.contents;}
+          else if(imgD.contents){
+            // It's a proxied image URL, use directly
+            fotoUrl=imgUrl;
+          }
+        }
+      }
+    }catch(e){/* foto non trovata, nessun problema */}
+
+    hideLoading();
+    openAdd({...extracted,fotoUrl,fav:false,createdAt:Date.now()});
+    if(fotoUrl)showToast('✅ Ricetta importata con foto!');
+    else showToast('✅ Ricetta importata! Aggiungi una foto.');
+
+  }catch(err){
+    hideLoading();
+    showToast('❌ '+(err.message||'Errore importazione'));
+  }
+}
 
 // VOICE INPUT
 let _voiceRec=null,_voiceFinal='',_voiceTranscript='',_voiceIncremental=false,_voiceTimerInt=null,_voiceSecs=0;
