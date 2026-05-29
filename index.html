@@ -233,6 +233,7 @@ textarea.fi{resize:none;min-height:72px;line-height:1.5}
         <button class="chip" onclick="setChip('contorno',this)">🥦 Contorno</button>
         <button class="chip" onclick="setChip('dessert',this)">🍰 Dessert</button>
         <button class="chip" onclick="setChip('bevanda',this)">🍹 Bevanda</button>
+        <button class="chip" onclick="setChip('preparazione',this)">🧑‍🍳 Preparazioni</button>
       </div>
     </div>
     <div id="catalogoBody" style="flex:1"></div>
@@ -279,7 +280,7 @@ textarea.fi{resize:none;min-height:72px;line-height:1.5}
 </div>
 
 <!-- REGISTRAZIONE VOCALE -->
-<div class="overlay" id="voiceOverlay">
+<div class="overlay" id="voiceOverlay" style="z-index:600">
   <div class="sheet">
     <div class="sheet-handle"></div>
     <div class="sheet-header">
@@ -467,8 +468,8 @@ try{
 <script>
 let DB=[],_fbReady=false,filterPortata='tutte',filterSearch='',filterIngrs=[],filterPortataList=[],filterMaxTime=0,editId=null,prevPage='catalogo',_formFotoUrl=null,_ctxId=null,_stTimer=null,_lpTimer=null;
 let scanData={A:null,B:null},_pickSide=null;
-const PORTATE=['antipasto','primo','secondo','contorno','dessert','bevanda'];
-const EMO={antipasto:'🥗',primo:'🍝',secondo:'🥩',contorno:'🥦',dessert:'🍰',bevanda:'🍹'};
+const PORTATE=['antipasto','primo','secondo','contorno','dessert','bevanda','preparazione'];
+const EMO={antipasto:'🥗',primo:'🍝',secondo:'🥩',contorno:'🥦',dessert:'🍰',bevanda:'🍹',preparazione:'🧑‍🍳'};
 const UNITS=['pz.','g','kg','ml','l','cucchiai','cucchiaini','q.b.'];
 
 window._onFbData=function(r){DB=r;_fbReady=true;hideLoading();document.getElementById('fbDot').textContent='🟢';renderCatalogo();};
@@ -576,7 +577,9 @@ let _detPorzioni=2;
 function renderDetail(id){
   const r=DB.find(x=>x.id===id);if(!r)return;
   _detPorzioni=2;
-  const heroHTML=r.fotoUrl?`<img class="detail-hero" src="${r.fotoUrl}">`:`<div class="detail-hero-ph">${EMO[r.portata]||'📄'}</div>`;
+  const heroHTML=r.fotoUrl
+    ?`<img class="detail-hero" src="${r.fotoUrl}"><button onclick="cropDetailPhoto('${r.id}')" style="position:absolute;bottom:56px;right:16px;background:rgba(0,0,0,.6);color:white;border:none;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--fb);z-index:10">✂️ Ritaglia</button>`
+    :`<div class="detail-hero-ph">${EMO[r.portata]||'📄'}</div>`;
   const tt=getTotalTime(r);
   const diffE={facile:'😊',medio:'🤔',difficile:'💪'}[r.difficolta]||'';
   const metas=[tt?`<div class="meta-chip"><div class="mv">${tt} min</div><div class="ml">Totale</div></div>`:'',r.tempoPrep?`<div class="meta-chip"><div class="mv">${r.tempoPrep}</div><div class="ml">Prep</div></div>`:'',r.tempoCottura?`<div class="meta-chip"><div class="mv">${r.tempoCottura}</div><div class="ml">Cottura</div></div>`:'',r.difficolta?`<div class="meta-chip"><div class="mv">${diffE}</div><div class="ml">${r.difficolta}</div></div>`:''].filter(Boolean).join('');
@@ -626,6 +629,17 @@ function switchPorzioni(n,id){_detPorzioni=n;const r=DB.find(x=>x.id===id);if(!r
 function switchSeg(name,btn){['ingr','passi','strum','note'].forEach(s=>{const el=document.getElementById('seg-'+s);if(el)el.style.display=s===name?'block':'none';});document.querySelectorAll('.seg-tab').forEach(b=>b.classList.remove('active'));btn.classList.add('active');}
 function shareRecipe(id){const r=DB.find(x=>x.id===id);if(!r)return;const t=`🍽️ ${r.nome}\n${r.descrizione||''}\n\n🛒 Ingredienti:\n${(r.ingredienti||[]).map(i=>`• ${i.nome} ${i.quantita} ${i.unita||''}`).join('\n')}\n\n👨‍🍳 Preparazione:\n${(r.passi||[]).map((p,i)=>`${i+1}. ${p.testo||p}`).join('\n')}`;if(navigator.share)navigator.share({title:r.nome,text:t});else navigator.clipboard?.writeText(t).then(()=>showToast('📋 Copiato!'));}
 
+async function cropDetailPhoto(id){
+  const r=DB.find(x=>x.id===id);if(!r||!r.fotoUrl)return;
+  openCrop(r.fotoUrl,async(cropped)=>{
+    r.fotoUrl=cropped;
+    if(window._fb?.ready()){try{await window._fb.save(r);}catch(e){showToast('❌ Errore salvataggio');return;}}
+    else persistLocal();
+    renderDetail(id);
+    showToast('✅ Foto ritagliata e salvata!');
+  });
+}
+
 // ADD / EDIT
 function openAdd(prefill){editId=prefill?.id||null;if(editId&&!DB.find(x=>x.id===editId))editId=null;document.getElementById('addTitle').textContent=editId?'✏️ Modifica':'✍️ Nuova Ricetta';buildForm(prefill||{});document.getElementById('addOverlay').classList.add('open');}
 function openEdit(id){const r=DB.find(x=>x.id===id);if(r)openAdd(r);}
@@ -647,6 +661,7 @@ function buildForm(r){
         <img id="mainPhotoImg" src="${r.fotoUrl||''}" style="${r.fotoUrl?'':'display:none'}">
         <span class="photo-upload-icon">📷</span><span class="photo-upload-label">Tocca per aggiungere foto</span>
         <button class="photo-change-btn" style="${r.fotoUrl?'':'display:none'}" id="mainPhotoCBtn" onclick="event.stopPropagation();pickMainPhoto()">Cambia</button>
+        <button class="photo-change-btn" style="${r.fotoUrl?'':'display:none'};right:72px;background:rgba(44,44,44,.7)" id="mainCropBtn" onclick="event.stopPropagation();cropMainPhoto()">✂️ Ritaglia</button>
       </div>
       <input type="file" id="mainPhotoFile" accept="image/*" onchange="onMainPhoto(event)" style="display:none">
       <button onclick="generateAIPhoto()" style="width:100%;margin-top:8px;padding:11px 16px;border-radius:var(--r-xs);border:1.5px solid var(--border);background:var(--white);font-family:var(--fb);font-size:13px;font-weight:500;color:var(--text2);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:all .2s" id="aiPhotoBtn">
@@ -736,7 +751,16 @@ function rmIngr(i){const el=document.getElementById(`ingr_${i}`);if(el)el.remove
 function addPasso(){const l=document.getElementById('passiList');l.insertAdjacentHTML('beforeend',stepRow({testo:'',fotoUrl:null},l.children.length));}
 function rmStep(i){const el=document.getElementById(`step_${i}`);if(el)el.remove();document.querySelectorAll('#passiList .step-num').forEach((b,i)=>b.textContent=i+1);}
 function pickMainPhoto(){document.getElementById('mainPhotoFile').click();}
-function onMainPhoto(e){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{_formFotoUrl=ev.target.result;const s=document.getElementById('mainPhotoSlot');s.classList.add('has-photo');document.getElementById('mainPhotoImg').src=ev.target.result;document.getElementById('mainPhotoImg').style.display='block';document.getElementById('mainPhotoCBtn').style.display='block';};r.readAsDataURL(f);}
+function onMainPhoto(e){
+  const f=e.target.files[0];if(!f)return;
+  const r=new FileReader();
+  r.onload=ev=>{
+    openCrop(ev.target.result,(cropped)=>{
+      setMainPhoto(cropped);
+    });
+  };
+  r.readAsDataURL(f);
+}
 function pickStepPhoto(i){document.getElementById(`stepFile_${i}`).click();}
 function onStepPhoto(e,i){
   const f=e.target.files[0];if(!f)return;
@@ -821,7 +845,7 @@ async function delRecipe(id){
 }
 
 // SCAN
-function openScan(){scanData={A:null,B:null};resetSlot('A');resetSlot('B');const s=localStorage.getItem('geminiKey');if(s)document.getElementById('apiKeyInput').value=s;updateScanBtn();document.getElementById('scanOverlay').classList.add('open');}
+function openScan(){scanData={A:null,B:null};resetSlot('A');resetSlot('B');loadSavedKey().then(k=>{if(k)document.getElementById('apiKeyInput').value=k;});updateScanBtn();document.getElementById('scanOverlay').classList.add('open');}
 function closeScan(){document.getElementById('scanOverlay').classList.remove('open');}
 function openPickMenu(side){_pickSide=side;document.getElementById('pickTitle').textContent=side==='A'?'Fronte scheda':'Retro scheda';document.getElementById('pickOverlay').classList.add('open');}
 function closePickMenu(){document.getElementById('pickOverlay').classList.remove('open');}
@@ -829,7 +853,33 @@ function pickSource(src){closePickMenu();if(!_pickSide)return;setTimeout(()=>doc
 function onPhoto(e,side){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{scanData[side]=ev.target.result;const slot=document.getElementById(`slot${side}`);slot.classList.add('filled');slot.onclick=()=>openPickMenu(side);slot.innerHTML=`<span class="scan-badge">${side==='A'?'FRONTE':'RETRO'}</span><img src="${ev.target.result}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"><span style="position:absolute;bottom:8px;right:8px;background:rgba(0,0,0,.55);color:white;font-size:10px;font-weight:700;padding:3px 8px;border-radius:6px;z-index:3">Cambia</span>`;updateScanBtn();};r.readAsDataURL(f);}
 function resetSlot(side){const slot=document.getElementById(`slot${side}`);slot.classList.remove('filled');slot.onclick=()=>openPickMenu(side);slot.innerHTML=`<span class="scan-badge">${side==='A'?'FRONTE':'RETRO'}</span><span class="scan-slot-icon">📄</span><span class="scan-slot-label">${side==='A'?'Tocca per aggiungere':'Opzionale'}</span>`;}
 function updateScanBtn(){const b=document.getElementById('scanGoBtn');b.disabled=!scanData.A;b.style.opacity=scanData.A?'1':'0.5';}
-function saveKey(){const k=document.getElementById('apiKeyInput').value.trim();if(k){localStorage.setItem('geminiKey',k);showToast('🔑 Chiave salvata');}}
+// API KEY — doppio salvataggio: localStorage + IndexedDB (sopravvive alla pulizia cache)
+const _idb={
+  db:null,
+  async open(){
+    if(this.db)return this.db;
+    return new Promise((res,rej)=>{
+      const req=indexedDB.open('ricettario_cfg',1);
+      req.onupgradeneeded=e=>e.target.result.createObjectStore('kv');
+      req.onsuccess=e=>{this.db=e.target.result;res(this.db);};
+      req.onerror=()=>rej();
+    });
+  },
+  async set(k,v){try{const db=await this.open();const tx=db.transaction('kv','readwrite');tx.objectStore('kv').put(v,k);}catch(e){}},
+  async get(k){try{const db=await this.open();return new Promise((res,rej)=>{const tx=db.transaction('kv','readonly');const req=tx.objectStore('kv').get(k);req.onsuccess=()=>res(req.result);req.onerror=()=>res(null);});}catch(e){return null;}}
+};
+async function saveKey(){
+  const k=document.getElementById('apiKeyInput').value.trim();
+  if(!k)return;
+  localStorage.setItem('geminiKey',k);
+  await _idb.set('geminiKey',k);
+  showToast('🔑 Chiave salvata');
+}
+async function loadSavedKey(){
+  let k=localStorage.getItem('geminiKey');
+  if(!k){k=await _idb.get('geminiKey');if(k)localStorage.setItem('geminiKey',k);}
+  return k||'';
+}
 
 // CROP
 async function cropBox(dataUrl,box,rotate){return new Promise(res=>{const img=new Image();img.onload=()=>{const W=img.naturalWidth,H=img.naturalHeight;const cx=Math.max(0,box.x*W),cy=Math.max(0,box.y*H);const cw=Math.min(W-cx,box.w*W),ch=Math.min(H-cy,box.h*H);if(cw<20||ch<20){res(dataUrl);return;}const ang=(rotate||0)*Math.PI/180;const sin=Math.abs(Math.sin(ang)),cos=Math.abs(Math.cos(ang));const canvas=document.createElement('canvas');if(rotate){canvas.width=Math.round(cw*cos+ch*sin);canvas.height=Math.round(cw*sin+ch*cos);}else{canvas.width=cw;canvas.height=ch;}const ctx=canvas.getContext('2d');if(rotate){ctx.translate(canvas.width/2,canvas.height/2);ctx.rotate(ang);ctx.drawImage(img,cx,cy,cw,ch,-cw/2,-ch/2,cw,ch);}else{ctx.drawImage(img,cx,cy,cw,ch,0,0,cw,ch);}res(canvas.toDataURL('image/jpeg',.82));};img.onerror=()=>res(dataUrl);img.src=dataUrl;});}
@@ -944,102 +994,53 @@ function closeUrlImport(){document.getElementById('urlOverlay').classList.remove
 
 async function importFromUrl(){
   const url=document.getElementById('urlInput').value.trim();
-  if(!url){showToast('⚠️ Incolla un URL valido');return;}
-  if(!url.startsWith('http')){showToast('⚠️ URL non valido');return;}
-  const key=localStorage.getItem('geminiKey');
-  if(!key){showToast('⚠️ Gemini API key mancante — configurala in Scansiona scheda');return;}
+  if(!url||!url.startsWith('http')){showToast('⚠️ Incolla un URL valido');return;}
+  const key=await loadSavedKey();
+  if(!key){showToast('⚠️ Gemini API key mancante — salvala in Scansiona scheda');return;}
 
   closeUrlImport();
   showLoading('🔗 Lettura pagina…','Recupero contenuto ricetta');
 
   try{
-    // Fetch page via CORS proxy
-    let html='';
-    const proxies=[
-      `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
-      `https://corsproxy.io/?${encodeURIComponent(url)}`
-    ];
-    for(const proxy of proxies){
-      try{
-        const r=await fetch(proxy);
-        if(!r.ok)continue;
-        const d=await r.json().catch(()=>null)||await r.text();
-        html=typeof d==='object'?d.contents:d;
-        if(html&&html.length>500)break;
-      }catch(e){continue;}
-    }
-    if(!html||html.length<200)throw new Error('Impossibile leggere la pagina. Prova a copiare il testo manualmente.');
+    // Jina Reader converte qualsiasi URL in testo pulito senza problemi CORS
+    const jinaUrl=`https://r.jina.ai/${url}`;
+    const r=await fetch(jinaUrl,{headers:{Accept:'text/plain'}});
+    if(!r.ok)throw new Error(`Impossibile leggere la pagina (${r.status}). Verifica che l'URL sia corretto.`);
+    const text=await r.text();
+    if(!text||text.length<100)throw new Error('Pagina vuota o non leggibile.');
 
-    // Strip HTML to plain text (keep structure)
-    const tmp=document.createElement('div');
-    tmp.innerHTML=html;
-    // Remove scripts, styles, navs
-    tmp.querySelectorAll('script,style,nav,header,footer,aside,iframe,noscript').forEach(el=>el.remove());
-    const text=tmp.innerText||tmp.textContent||'';
-    // Truncate to ~8000 chars to stay within Gemini limits
-    const excerpt=text.replace(/\s+/g,' ').trim().slice(0,8000);
+    // Truncate to ~10000 chars
+    const excerpt=text.replace(/\s+/g,' ').trim().slice(0,10000);
 
     showLoading('🤖 Analisi Gemini…','Estrazione ingredienti e passi');
 
-    const prompt=`Sei un esperto cuoco. Analizza il seguente testo estratto da una pagina web di ricette e restituisci SOLO JSON puro (nessun markdown, nessuna spiegazione) con questa struttura esatta:
-{
-  "nome":"Nome ricetta",
-  "portata":"antipasto|primo|secondo|contorno|dessert|bevanda",
-  "descrizione":"Breve descrizione appetitosa (1-2 frasi)",
-  "tempoPrep":"X min",
-  "tempoCottura":"X min",
-  "porzioni2":"numero porzioni",
-  "difficolta":"facile|medio|difficile",
-  "ingredienti":[{"nome":"ingrediente","quantita":"dose","quantita4":"","unita":"g|ml|cucchiai|ecc"}],
-  "passi":[{"testo":"testo passo completo e dettagliato","fotoUrl":null}],
-  "strumenti":["strumento1","strumento2"],
-  "note":"varianti o consigli utili"
-}
-REGOLE IMPORTANTI:
-- Se la procedura è un unico testo, dividila in step logici (massimo 8-10 step, ognuno con un'azione chiara)
-- Ogni step deve essere auto-contenuto e descrivere UNA sola azione
-- Se non trovi un'informazione, usa stringa vuota "" o array vuoto []
-- Per portata: inferisci dal nome/descrizione, default "secondo"
-- Per difficoltà: inferisci dalla complessità, default "facile"
-- Strumenti: deducili dalla ricetta anche se non esplicitati
+    const prompt=`Sei un esperto cuoco italiano. Analizza il seguente testo estratto da una pagina web di ricette e restituisci SOLO JSON puro (nessun markdown, nessun backtick, nessuna spiegazione) con questa struttura:
+{"nome":"","portata":"antipasto|primo|secondo|contorno|dessert|bevanda|preparazione","descrizione":"","tempoPrep":"","tempoCottura":"","porzioni2":"","difficolta":"facile|medio|difficile","ingredienti":[{"nome":"","quantita":"","quantita4":"","unita":""}],"passi":[{"testo":"","fotoUrl":null}],"strumenti":[],"note":""}
 
-TESTO PAGINA:
+REGOLE:
+- Se la procedura è un blocco unico, dividila in 6-10 step logici, ognuno con UNA azione
+- Se non trovi un campo, usa stringa vuota o array vuoto
+- portata: inferisci dal nome, default "secondo"; se è una base (pane, pasta fresca, salsa) usa "preparazione"
+- Strumenti: deducili anche se non scritti esplicitamente
+- Rispondi SOLO con il JSON, niente altro
+
+TESTO:
 ${excerpt}`;
 
     const raw=await geminiCall(key,[{text:prompt}]);
     let extracted;
-    try{extracted=JSON.parse(raw);}
-    catch(e){
-      // Try to extract JSON from response
+    try{
+      const clean=raw.replace(/```json|```/g,'').trim();
+      extracted=JSON.parse(clean);
+    }catch(e){
       const match=raw.match(/\{[\s\S]*\}/);
       if(match)extracted=JSON.parse(match[0]);
       else throw new Error('Risposta Gemini non valida. Riprova.');
     }
 
-    // Try to fetch the main image from the page
-    let fotoUrl=null;
-    try{
-      const imgMatch=html.match(/<meta[^>]+(?:og:image|twitter:image)[^>]+content=["']([^"']+)["']/i)||
-                     html.match(/content=["']([^"']+)["'][^>]+(?:og:image|twitter:image)/i);
-      if(imgMatch?.[1]){
-        const imgUrl=imgMatch[1].startsWith('http')?imgMatch[1]:new URL(imgMatch[1],url).href;
-        // Try to load it
-        const imgR=await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(imgUrl)}`);
-        if(imgR.ok){
-          const imgD=await imgR.json();
-          if(imgD.contents&&imgD.contents.startsWith('data:image')){fotoUrl=imgD.contents;}
-          else if(imgD.contents){
-            // It's a proxied image URL, use directly
-            fotoUrl=imgUrl;
-          }
-        }
-      }
-    }catch(e){/* foto non trovata, nessun problema */}
-
     hideLoading();
-    openAdd({...extracted,fotoUrl,fav:false,createdAt:Date.now()});
-    if(fotoUrl)showToast('✅ Ricetta importata con foto!');
-    else showToast('✅ Ricetta importata! Aggiungi una foto.');
+    openAdd({...extracted,fotoUrl:null,fav:false,createdAt:Date.now()});
+    showToast('✅ Ricetta importata! Aggiungi una foto.');
 
   }catch(err){
     hideLoading();
@@ -1253,8 +1254,8 @@ function setMainPhotoUrl(url){
   if(slot)slot.classList.add('has-photo');
   const img=document.getElementById('mainPhotoImg');
   if(img){img.src=url;img.style.display='block';}
-  const btn=document.getElementById('mainPhotoCBtn');
-  if(btn)btn.style.display='block';
+  const btn=document.getElementById('mainPhotoCBtn');if(btn)btn.style.display='block';
+  const cBtn=document.getElementById('mainCropBtn');if(cBtn)cBtn.style.display='block';
 }
 
 function setMainPhoto(dataUrl){
@@ -1263,8 +1264,13 @@ function setMainPhoto(dataUrl){
   if(slot)slot.classList.add('has-photo');
   const img=document.getElementById('mainPhotoImg');
   if(img){img.src=dataUrl;img.style.display='block';}
-  const btn=document.getElementById('mainPhotoCBtn');
-  if(btn)btn.style.display='block';
+  const btn=document.getElementById('mainPhotoCBtn');if(btn)btn.style.display='block';
+  const cBtn=document.getElementById('mainCropBtn');if(cBtn)cBtn.style.display='block';
+}
+
+function cropMainPhoto(){
+  if(!_formFotoUrl){showToast('⚠️ Nessuna foto da ritagliare');return;}
+  openCrop(_formFotoUrl,(cropped)=>setMainPhoto(cropped));
 }
 
 // PWA SETUP (manifest + service worker, icona SVG inline)
@@ -1289,10 +1295,128 @@ function showLoading(msg,sub){document.getElementById('loadingMsg').textContent=
 function hideLoading(){document.getElementById('loadingCover').classList.remove('show');}
 function showToast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2800);}
 
+// ════════════════════════════════
+// IMAGE CROP
+// ════════════════════════════════
+let _cropCallback=null,_cropImg=null,_cropCanvas=null,_cropCtx=null;
+let _cropDrag=false,_cropStart={x:0,y:0},_cropRect={x:0,y:0,w:0,h:0};
+let _cropImgNat={w:0,h:0},_cropScale=1,_cropOffset={x:0,y:0};
+
+function openCrop(dataUrl,callback){
+  _cropCallback=callback;
+  const overlay=document.getElementById('cropOverlay');
+  const canvas=document.getElementById('cropCanvas');
+  _cropCanvas=canvas;_cropCtx=canvas.getContext('2d');
+  overlay.classList.add('open');
+  const img=new Image();
+  img.onload=()=>{
+    _cropImg=img;
+    _cropImgNat={w:img.naturalWidth,h:img.naturalHeight};
+    const maxW=Math.min(window.innerWidth-40,500);
+    const maxH=Math.min(window.innerHeight*0.55,400);
+    _cropScale=Math.min(maxW/img.naturalWidth,maxH/img.naturalHeight);
+    canvas.width=Math.round(img.naturalWidth*_cropScale);
+    canvas.height=Math.round(img.naturalHeight*_cropScale);
+    // Default selection: square centered, 80% of smaller side
+    const side=Math.round(Math.min(canvas.width,canvas.height)*0.8);
+    _cropRect={x:Math.round((canvas.width-side)/2),y:Math.round((canvas.height-side)/2),w:side,h:side};
+    drawCrop();
+  };
+  img.src=dataUrl;
+}
+function drawCrop(){
+  const c=_cropCanvas,ctx=_cropCtx;
+  ctx.clearRect(0,0,c.width,c.height);
+  ctx.drawImage(_cropImg,0,0,c.width,c.height);
+  // Dim outside
+  ctx.fillStyle='rgba(0,0,0,0.5)';
+  ctx.fillRect(0,0,c.width,c.height);
+  // Clear selection
+  ctx.clearRect(_cropRect.x,_cropRect.y,_cropRect.w,_cropRect.h);
+  ctx.drawImage(_cropImg,_cropRect.x/_cropScale,_cropRect.y/_cropScale,_cropRect.w/_cropScale,_cropRect.h/_cropScale,_cropRect.x,_cropRect.y,_cropRect.w,_cropRect.h);
+  // Border
+  ctx.strokeStyle='white';ctx.lineWidth=2;
+  ctx.strokeRect(_cropRect.x,_cropRect.y,_cropRect.w,_cropRect.h);
+  // Handles at corners
+  const hs=10;
+  [[_cropRect.x,_cropRect.y],[_cropRect.x+_cropRect.w,_cropRect.y],[_cropRect.x,_cropRect.y+_cropRect.h],[_cropRect.x+_cropRect.w,_cropRect.y+_cropRect.h]].forEach(([hx,hy])=>{
+    ctx.fillStyle='white';ctx.beginPath();ctx.arc(hx,hy,hs/2,0,Math.PI*2);ctx.fill();
+  });
+}
+function cropPointerDown(e){
+  e.preventDefault();
+  const pt=cropPoint(e);
+  _cropDrag=true;_cropStart=pt;
+  // Check if inside selection to move, else start new
+  if(pt.x>_cropRect.x&&pt.x<_cropRect.x+_cropRect.w&&pt.y>_cropRect.y&&pt.y<_cropRect.y+_cropRect.h){
+    _cropDrag='move';
+  }else{
+    _cropDrag='new';_cropRect={x:pt.x,y:pt.y,w:0,h:0};
+  }
+}
+function cropPointerMove(e){
+  e.preventDefault();
+  if(!_cropDrag)return;
+  const pt=cropPoint(e);
+  const c=_cropCanvas;
+  if(_cropDrag==='move'){
+    const dx=pt.x-_cropStart.x,dy=pt.y-_cropStart.y;
+    _cropRect.x=Math.max(0,Math.min(c.width-_cropRect.w,_cropRect.x+dx));
+    _cropRect.y=Math.max(0,Math.min(c.height-_cropRect.h,_cropRect.y+dy));
+    _cropStart=pt;
+  }else{
+    _cropRect.w=Math.max(30,Math.min(c.width-_cropRect.x,pt.x-_cropRect.x));
+    _cropRect.h=Math.max(30,Math.min(c.height-_cropRect.y,pt.y-_cropRect.y));
+  }
+  drawCrop();
+}
+function cropPointerUp(e){e.preventDefault();_cropDrag=false;}
+function cropPoint(e){
+  const r=_cropCanvas.getBoundingClientRect();
+  const src=e.touches?e.touches[0]:e;
+  const scaleX=_cropCanvas.width/r.width,scaleY=_cropCanvas.height/r.height;
+  return{x:Math.round((src.clientX-r.left)*scaleX),y:Math.round((src.clientY-r.top)*scaleY)};
+}
+function confirmCrop(){
+  // Extract cropped region at original resolution
+  const out=document.createElement('canvas');
+  const srcX=_cropRect.x/_cropScale,srcY=_cropRect.y/_cropScale;
+  const srcW=_cropRect.w/_cropScale,srcH=_cropRect.h/_cropScale;
+  out.width=Math.round(srcW);out.height=Math.round(srcH);
+  out.getContext('2d').drawImage(_cropImg,srcX,srcY,srcW,srcH,0,0,srcW,srcH);
+  const result=out.toDataURL('image/jpeg',0.88);
+  document.getElementById('cropOverlay').classList.remove('open');
+  if(_cropCallback)_cropCallback(result);
+}
+function closeCrop(){document.getElementById('cropOverlay').classList.remove('open');_cropCallback=null;}
+
 // INIT
 setupPWA();
+loadSavedKey();// pre-warm IndexedDB
 showLoading('Connessione…','Caricamento ricette dal cloud');
 setTimeout(()=>{if(!_fbReady){hideLoading();DB=JSON.parse(localStorage.getItem('ric4')||'[]');renderCatalogo();showToast('⚠️ Offline — dati locali');}},4000);
 </script>
+<!-- CROP OVERLAY -->
+<div class="overlay" id="cropOverlay" style="z-index:700;align-items:center;padding:20px">
+  <div class="sheet" style="border-radius:24px;max-height:95dvh;overflow:visible" onclick="event.stopPropagation()">
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <span class="sheet-title">✂️ Ritaglia immagine</span>
+      <button class="sheet-close" onclick="closeCrop()">✕</button>
+    </div>
+    <div style="padding:16px 20px;text-align:center">
+      <p style="font-size:13px;color:var(--text2);margin-bottom:12px">Trascina per spostare la selezione, o disegna una nuova area di ritaglio</p>
+      <canvas id="cropCanvas" style="max-width:100%;border-radius:12px;touch-action:none;cursor:crosshair;display:block;margin:0 auto"
+        onmousedown="cropPointerDown(event)" onmousemove="cropPointerMove(event)" onmouseup="cropPointerUp(event)"
+        ontouchstart="cropPointerDown(event)" ontouchmove="cropPointerMove(event)" ontouchend="cropPointerUp(event)">
+      </canvas>
+      <div style="display:flex;gap:10px;margin-top:16px;padding-bottom:calc(env(safe-area-inset-bottom,0px)+8px)">
+        <button class="btn btn-outline" style="flex:1" onclick="closeCrop()">Annulla</button>
+        <button class="btn btn-orange" style="flex:1" onclick="confirmCrop()">✂️ Ritaglia</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
