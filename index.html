@@ -932,24 +932,23 @@ async function startScan(){
     showLoading('📖 Lettura scheda…','Estrazione dati, ingredienti e passi');
     const p1=[imgPart(scanData.A)];
     if(scanData.B)p1.push(imgPart(scanData.B));
-    p1.push({text:`Sei un esperto cuoco italiano. Analizza questa scheda ricetta HelloFresh.
-FRONTE: grande foto piatto + titolo + tempo totale. RETRO: lista ingredienti con 2 colonne (2 pers / 4 pers) + passi numerati con foto per ogni passo.
+    p1.push({text:`Sei un OCR preciso. Il tuo compito è LEGGERE e TRASCRIVERE esattamente ciò che è scritto in questa scheda ricetta, senza aggiungere, inventare, modificare o dedurre nulla.
 
-Restituisci SOLO JSON puro (nessun markdown) con questa struttura:
-{
-  "nome":"Nome completo ricetta",
-  "portata":"antipasto|primo|secondo|contorno|dessert|bevanda",
-  "descrizione":"Descrizione breve",
-  "tempoPrep":"X min",
-  "tempoCottura":"X min",
-  "porzioni2":"2",
-  "difficolta":"facile|medio|difficile",
-  "ingredienti":[{"nome":"...","quantita":"dose 2 pers","quantita4":"dose 4 pers","unita":"..."}],
-  "passi":[{"testo":"testo completo passo","fotoUrl":null}],
-  "strumenti":["padella","pentola","colino","mestolo","tagliere","coltello"],
-  "note":"..."
-}
-REGOLE: ingredienti = entrambe le colonne; tempoPrep = preparazione a freddo; tempoCottura = cottura effettiva; strumenti = tutti gli utensili dagli step. Solo JSON puro.`});
+REGOLE ASSOLUTE:
+- Trascrivi SOLO ciò che è scritto nella scheda, parola per parola
+- NON aggiungere ingredienti non presenti
+- NON aggiungere passi non presenti
+- NON modificare o riformulare i testi dei passi: copiali esattamente
+- NON dedurre strumenti non esplicitamente citati nei passi
+- Se un campo non è visibile o leggibile, usa stringa vuota ""
+- NON inventare dosi: se non leggi una dose chiaramente, usa ""
+- Gli ingredienti sono nelle colonne: prima colonna = dose per 2 persone, seconda colonna = dose per 4 persone
+- I passi sono numerati: trascrivili nell'ordine esatto, con il testo esatto
+
+Restituisci SOLO JSON puro (zero markdown, zero backtick, zero spiegazioni):
+{"nome":"","portata":"antipasto|primo|secondo|contorno|dessert|bevanda","descrizione":"","tempoPrep":"","tempoCottura":"","porzioni2":"2","difficolta":"facile|medio|difficile","ingredienti":[{"nome":"","quantita":"","quantita4":"","unita":""}],"passi":[{"testo":"","fotoUrl":null}],"strumenti":[],"note":""}
+
+IMPORTANTE: "strumenti" = solo utensili esplicitamente nominati nel testo dei passi (es. "padella", "pentola"). Se non sono nominati esplicitamente, lascia array vuoto [].`});
     const t1=await geminiCall(key,p1);
     let extracted;
     try{extracted=JSON.parse(t1);}catch{throw new Error('Risposta non valida. Riprova con foto più nitide.');}
@@ -1014,17 +1013,22 @@ async function importFromUrl(){
 
     showLoading('🤖 Analisi Gemini…','Estrazione ingredienti e passi');
 
-    const prompt=`Sei un esperto cuoco italiano. Analizza il seguente testo estratto da una pagina web di ricette e restituisci SOLO JSON puro (nessun markdown, nessun backtick, nessuna spiegazione) con questa struttura:
+    const prompt=`Sei un estrattore di dati preciso. Il tuo compito è ESTRARRE e TRASCRIVERE le informazioni esattamente come appaiono nel testo della pagina, senza aggiungere, inventare o modificare nulla.
+
+REGOLE ASSOLUTE:
+- Trascrivi ingredienti e passi ESATTAMENTE come scritti nella pagina, parola per parola
+- NON aggiungere ingredienti non presenti nel testo
+- NON aggiungere passi non presenti nel testo
+- NON riformulare, riassumere o espandere i testi dei passi: copiali letteralmente
+- NON dedurre strumenti non esplicitamente citati nel testo
+- Se la procedura è un unico blocco di testo senza numerazione, dividila in step SOLO ai punti logici naturali (punto fermo, "poi", "quindi", "infine") senza aggiungere contenuto
+- Se un campo non è presente nel testo, usa stringa vuota "" o array vuoto []
+- Per portata: inferisci solo dal nome/titolo; se è una base (pane, pasta fresca, salsa, brodo) usa "preparazione", altrimenti default "secondo"
+- Rispondi SOLO con il JSON puro, zero markdown, zero backtick, zero spiegazioni
+
 {"nome":"","portata":"antipasto|primo|secondo|contorno|dessert|bevanda|preparazione","descrizione":"","tempoPrep":"","tempoCottura":"","porzioni2":"","difficolta":"facile|medio|difficile","ingredienti":[{"nome":"","quantita":"","quantita4":"","unita":""}],"passi":[{"testo":"","fotoUrl":null}],"strumenti":[],"note":""}
 
-REGOLE:
-- Se la procedura è un blocco unico, dividila in 6-10 step logici, ognuno con UNA azione
-- Se non trovi un campo, usa stringa vuota o array vuoto
-- portata: inferisci dal nome, default "secondo"; se è una base (pane, pasta fresca, salsa) usa "preparazione"
-- Strumenti: deducili anche se non scritti esplicitamente
-- Rispondi SOLO con il JSON, niente altro
-
-TESTO:
+TESTO PAGINA:
 ${excerpt}`;
 
     const raw=await geminiCall(key,[{text:prompt}]);
