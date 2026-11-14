@@ -644,7 +644,7 @@ try{
 <!-- ═══════════ APP ═══════════ -->
 <script>
 'use strict';
-const VERSION='3.0';
+const VERSION='3.1';
 const PORTATE=['antipasto','primo','secondo','contorno','dessert','bevanda','preparazione'];
 const PORT_LBL={antipasto:'Antipasto',primo:'Primo',secondo:'Secondo',contorno:'Contorno',dessert:'Dolce',bevanda:'Bevanda',preparazione:'Preparazione'};
 const PORT_PL={antipasto:'Antipasti',primo:'Primi',secondo:'Secondi',contorno:'Contorni',dessert:'Dolci',bevanda:'Bevande',preparazione:'Preparazioni'};
@@ -802,13 +802,26 @@ async function fetchT(url,opts={},ms=20000,signal){
 }
 
 /* ═══════════ GEMINI ═══════════ */
-// opt: {json:true, thinking:'low'|'minimal'|null, timeout, signal, onRetry}
-async function geminiCall(parts,opt={}){
-  const key=await getKey();
-  if(!key){const e=new Error('Manca la chiave Gemini: aggiungila nelle Impostazioni.');e.noKey=true;throw e;}
-  const model=getModel();
+// Elenco dei modelli Flash disponibili per la chiave (cache 1 h), ordinati dal più recente
+const Gem={models:null,modelsAt:0,lastModel:null,avoid:{}};
+async function listFlashModels(key,signal){
+  if(Gem.models&&Date.now()-Gem.modelsAt<36e5)return Gem.models;
+  const r=await fetchT('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200',{headers:{'x-goog-api-key':key}},15000,signal);
+  if(!r.ok)return [];
+  const d=await r.json();
+  const ver=n=>parseFloat((n.match(/gemini-(\d+(?:\.\d+)?)/)||[])[1]||0);
+  const list=(d.models||[]).filter(m=>(m.supportedGenerationMethods||[]).includes('generateContent'))
+    .map(m=>m.name.replace(/^models\//,''))
+    .filter(n=>/gemini/.test(n)&&/flash/.test(n)&&!/image|tts|audio|live|embed|robotic|computer|native/.test(n))
+    .sort((a,b)=>(/lite/.test(a)-/lite/.test(b))||ver(b)-ver(a)||(/preview|exp/.test(a)-/preview|exp/.test(b))||a.length-b.length);
+  Gem.models=list;Gem.modelsAt=Date.now();
+  return list;
+}
+function gemErr(msg,extra){return Object.assign(new Error(msg),extra);}
+// Una chiamata a un modello, con pochi nuovi tentativi. Gli errori "fallback" fanno provare un altro modello.
+async function geminiTry(model,key,parts,opt){
   const url=`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
-  const waits=[3000,6000,12000];
+  const waits=[2500,6000];
   let useThinking=opt.thinking!==null,attempt=0;
   while(true){
     const gc={};
@@ -821,28 +834,58 @@ async function geminiCall(parts,opt={}){
       const text=(cand?.content?.parts||[]).filter(p=>p.text&&!p.thought).map(p=>p.text).join('').trim();
       if(!text){
         const why=d.promptFeedback?.blockReason||cand?.finishReason||'risposta vuota';
-        throw new Error(`Gemini non ha restituito testo (${why}). Riprova.`);
+        throw gemErr(`Gemini non ha restituito testo (${why}). Riprova.`);
       }
       return text;
     }
     const e=await res.json().catch(()=>({}));
     const msg=e.error?.message||`HTTP ${res.status}`;
-    // Parametro thinking non supportato dal modello: riprova senza
+    console.warn('Gemini',model,res.status,msg);
     if(res.status===400&&useThinking&&/thinking/i.test(msg)){useThinking=false;continue;}
-    const busy=res.status===503||res.status===429||res.status===500||/high demand|overloaded|try again later|unavailable/i.test(msg);
-    if(busy&&attempt<waits.length){
-      opt.onRetry?.(attempt+1,waits.length);
-      await sleep(waits[attempt],opt.signal);attempt++;continue;
+    if(res.status===429||/quota|rate limit|resource.?exhausted/i.test(msg)){
+      const delay=parseFloat(((e.error?.details||[]).find(x=>x.retryDelay)||{}).retryDelay)||0;
+      const daily=/per.?day|daily|PerDay/i.test(msg);
+      if(!daily&&delay&&delay<=20&&attempt<1){opt.onRetry?.(`Limite di richieste al minuto: riprovo tra ${Math.ceil(delay)} s…`);await sleep(delay*1000+500,opt.signal);attempt++;continue;}
+      throw gemErr(daily?`quota giornaliera gratuita esaurita su ${model}`:`limite di richieste raggiunto su ${model}`,{fallback:true,quota:true,daily,raw:msg});
     }
-    if(busy)throw new Error('Google è sovraccarico in questo momento. Riprova tra qualche minuto.');
-    if(res.status===404||/not found|is not supported|deprecated/i.test(msg))throw new Error(`Il modello “${model}” non è disponibile. Cambialo nelle Impostazioni.`);
-    if(/api key/i.test(msg)||res.status===403)throw new Error('Chiave Gemini non valida o senza permessi. Controllala nelle Impostazioni.');
-    if(/request payload size|too large/i.test(msg))throw new Error('Le foto sono troppo pesanti per Gemini. Riprova con foto più piccole.');
-    throw new Error('Gemini: '+msg);
+    const busy=res.status===503||res.status===500||res.status===502||res.status===504||/high demand|overloaded|try again later|unavailable/i.test(msg);
+    if(busy){
+      if(attempt<waits.length){opt.onRetry?.(`Google è occupato, nuovo tentativo ${attempt+1} di ${waits.length}…`);await sleep(waits[attempt],opt.signal);attempt++;continue;}
+      throw gemErr(`${model} è sovraccarico (errore ${res.status})`,{fallback:true,raw:msg});
+    }
+    if(res.status===404||/not found|is not supported|deprecated/i.test(msg))throw gemErr(`il modello ${model} non è disponibile`,{fallback:true,notFound:true,raw:msg});
+    if(/api key/i.test(msg)||res.status===403)throw gemErr('Chiave Gemini non valida o senza permessi. Controllala nelle Impostazioni.',{raw:msg});
+    if(/request payload size|too large/i.test(msg))throw gemErr('Le foto sono troppo pesanti per Gemini. Riprova con foto più piccole.',{raw:msg});
+    throw gemErr('Gemini: '+msg,{raw:msg});
   }
 }
+// opt: {json:true, thinking:'low'|'minimal'|null, timeout, signal, onRetry(testo)}
+// Se il modello scelto è sovraccarico o senza quota, prova da solo fino a 2 altri modelli Flash.
+async function geminiCall(parts,opt={}){
+  const key=await getKey();
+  if(!key)throw gemErr('Manca la chiave Gemini: aggiungila nelle Impostazioni.',{noKey:true});
+  const primary=getModel();
+  const okNow=m=>!(Gem.avoid[m]>Date.now());
+  const loadAlts=async()=>(await listFlashModels(key,opt.signal).catch(err=>{if(err.name==='AbortError')throw err;return [];})).filter(m=>m!==primary&&okNow(m)).slice(0,2);
+  let order=[primary],altsLoaded=false;
+  // modello appena fallito (sovraccarico/quota): parti dalle alternative, ma riprova comunque anche quello
+  if(!okNow(primary)){order=[...await loadAlts(),primary];altsLoaded=true;}
+  const fails=[];
+  for(let i=0;i<order.length&&i<3;i++){
+    const model=order[i];
+    if(model!==primary)opt.onRetry?.(`Provo con un altro modello: ${model}…`);
+    try{const t=await geminiTry(model,key,parts,opt);Gem.lastModel=model;return t;}
+    catch(e){if(!e.fallback)throw e;fails.push(e);Gem.avoid[model]=Date.now()+(e.daily?36e5:3e5);}
+    if(!altsLoaded){altsLoaded=true;order.push(...(await loadAlts()).filter(m=>!order.includes(m)));}
+  }
+  const allQuota=fails.length&&fails.every(f=>f.quota);
+  const detail=fails.map(f=>f.message).join('; ');
+  const tried=order.slice(0,fails.length).join(', ');
+  if(allQuota)throw gemErr(fails.some(f=>f.daily)?`Quota gratuita giornaliera di Gemini esaurita (modelli provati: ${tried}). Si azzera ogni giorno: riprova domani.`:`Troppe richieste a Gemini in poco tempo (modelli provati: ${tried}). Aspetta un minuto e riprova.`);
+  throw gemErr(`Google non riesce a rispondere ora (${detail||'nessun modello alternativo disponibile'}). Riprova tra qualche minuto.`);
+}
 function imgPart(d){const [h,b]=d.split(',');return {inline_data:{mime_type:(h.match(/:(.*?);/)||[])[1]||'image/jpeg',data:b}};}
-const retryNotice=(i,n)=>setLoading(null,`Google è occupato, nuovo tentativo ${i} di ${n}…`);
+const retryNotice=t=>setLoading(null,t);
 
 /* ═══════════ TASK (loading + annulla) ═══════════ */
 let _task=null;
@@ -1448,7 +1491,7 @@ async function startScan(){
   if(!data)return;
   closeLayer('ov-scan');
   openEditor(data,{title:'Controlla e salva'});
-  toast('Scheda letta: controlla i dati e salva','ok');
+  toast(Gem.lastModel&&Gem.lastModel!==getModel()?`Scheda letta con ${Gem.lastModel} (il modello principale era occupato)`:'Scheda letta: controlla i dati e salva','ok');
 }
 
 /* ═══════════ IMPORT DA LINK / TESTO ═══════════ */
@@ -1743,7 +1786,7 @@ async function openSettings(){
       <div class="alist">
         <div class="key-row"><input class="in" id="keyIn" type="password" placeholder="Incolla la chiave API" value="${esc(key)}" autocomplete="off" spellcheck="false"><button class="icon-btn soft" style="width:50px;height:50px;border-radius:14px" onclick="const i=$('keyIn');i.type=i.type==='password'?'text':'password'" aria-label="Mostra">${ico('eye')}</button></div>
         <div style="display:flex;gap:8px;padding:0 12px 12px"><button class="btn primary md" style="flex:1" onclick="saveKeyUI()">Salva</button><button class="btn soft md" style="flex:1" onclick="testGemini()">Verifica</button></div>
-        <div class="set-row"><span>Modello</span><input class="in" id="modelIn" value="${esc(getModel())}" style="height:40px;max-width:200px;font-size:14px;text-align:right" onchange="saveModel(this.value)" spellcheck="false" autocapitalize="off"></div>
+        <button class="aitem" onclick="chooseModel()">${ico('sparkle')}<span class="grow">Modello<div class="sub" id="modelLbl">${esc(getModel())}</div></span>${ico('chev','sm chev')}</button>
       </div>
       <p class="hint" style="margin-left:4px">Chiave gratuita su aistudio.google.com. Resta salvata solo su questo telefono.</p>
     </div>
@@ -1768,12 +1811,23 @@ async function openSettings(){
   openLayer('ov-settings');
 }
 async function saveKeyUI(){await setKey($('keyIn').value);$('scanKeyWarn').style.display=(await getKey())?'none':'flex';toast($('keyIn').value.trim()?'Chiave salvata':'Chiave rimossa','ok');}
-function saveModel(v){v=v.trim();if(v&&v!==CFG.defaultModel)localStorage.setItem('geminiModel',v);else{localStorage.removeItem('geminiModel');$('modelIn').value=CFG.defaultModel;}toast('Modello: '+getModel());}
+function saveModel(v){v=(v||'').trim();if(v&&v!==CFG.defaultModel)localStorage.setItem('geminiModel',v);else localStorage.removeItem('geminiModel');delete Gem.avoid[getModel()];const l=$('modelLbl');if(l)l.textContent=getModel();toast('Modello: '+getModel(),'ok');}
+async function chooseModel(){
+  if($('keyIn')?.value.trim())await setKey($('keyIn').value);
+  const key=await getKey();
+  if(!key){toast('Inserisci prima la chiave','err');return;}
+  Gem.models=null;
+  const list=await runTask('Carico i modelli…','Elenco dei modelli disponibili per la tua chiave',s=>listFlashModels(key,s));
+  if(!list)return;
+  if(!list.length){toast('Non riesco a leggere l\'elenco dei modelli. Controlla la chiave.','err');return;}
+  const cur=getModel();
+  actionSheet('Modello Gemini',[...list.slice(0,10).map(m=>({label:m,icon:m===cur?'check':'sparkle',fn:()=>saveModel(m)})),{label:'Ripristina predefinito ('+CFG.defaultModel+')',icon:'arr-r',fn:()=>saveModel('')}]);
+}
 async function testGemini(){
   if($('keyIn').value.trim())await setKey($('keyIn').value);
   const t0=Date.now();
   const r=await runTask('Verifico Gemini…',getModel(),async signal=>parseJSON(await geminiCall([{text:'Rispondi solo con {"ok":true}'}],{thinking:'minimal',timeout:30000,signal,onRetry:retryNotice})));
-  if(r)toast(`Gemini funziona (${((Date.now()-t0)/1000).toFixed(1).replace('.',',')} s)`,'ok');
+  if(r)toast(`Gemini funziona con ${Gem.lastModel} (${((Date.now()-t0)/1000).toFixed(1).replace('.',',')} s)`,'ok');
 }
 function setTheme(t){localStorage.setItem('theme',t);applyTheme();document.querySelectorAll('#settingsBody .seg button').forEach(b=>b.classList.toggle('on',b.getAttribute('onclick')===`setTheme('${t}')`));}
 function applyTheme(){const p=localStorage.getItem('theme')||'auto';const d=p==='dark'||(p==='auto'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.dataset.theme=d?'dark':'light';$('metaTheme').content=d?'#0F0F0F':'#F7F5F2';}
