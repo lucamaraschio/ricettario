@@ -1584,6 +1584,7 @@ const IMPORT_RULES=`REGOLE:
 - Trascrivi ingredienti e passi come scritti nella fonte, senza inventare nulla e senza riassumere
 - NON aggiungere ingredienti, passi o strumenti non presenti
 - Nel testo dei passi NON riportare i numeri o le etichette dei passi del sito ("1.", "Passo 2:", "Step 3"), anche quando unisci più passi in uno; ogni passo inizia con la lettera maiuscola
+- Togli dal testo i rimandi numerici alle foto del sito (es. "aggiungete l'aglio 1 e fatelo rosolare" diventa "aggiungete l'aglio e fatelo rosolare"; "salate 3, pepate" diventa "salate, pepate"), ma lascia le quantità e i tempi ("per 5 minuti", "4 fette")
 - Ignora del tutto pubblicità, inviti a iscriversi, link ad altre ricette, didascalie promozionali e commenti
 - PASSI: segui la suddivisione del procedimento originale (passi numerati, titoletti o paragrafi del procedimento). Se il testo di un passo è interrotto da pubblicità, immagini, link o a capo e il discorso continua (stessa azione, frase che prosegue, frase che inizia in minuscolo o con "poi", "quindi", "intanto", "a questo punto"…), uniscilo in UN SOLO passo. Non creare mai un passo da un frammento di frase. Se il procedimento è un unico blocco senza divisioni, dividilo in fasi coerenti (es. preparare le verdure, cuocere, assemblare, servire), di solito 3-8 passi
 - Dosi: "quantita" = dose per 2 persone, "quantita4" = dose per 4 persone. Se la fonte indica il numero di porzioni, calcola le due dosi in proporzione arrotondando in modo sensato; se non lo indica, metti la dose originale in "quantita", lascia "quantita4" vuoto e scrivi nelle note "Dosi originali della ricetta"
@@ -1800,12 +1801,28 @@ function cleanStep(t){
   s=s.trim();
   return s?s.charAt(0).toLocaleUpperCase('it-IT')+s.slice(1):s;
 }
+// Rimandi alle foto in stile "aglio 1 e…", "salate 3, pepate": numeri in sequenza 1,2,3… lungo tutta la ricetta,
+// subito dopo una parola e seguiti da punteggiatura o da una parola di collegamento. Quantità e tempi restano.
+const REF_PREV=/^(per|circa|di|a|da|in|con|altri|altre|ogni|fino|x|e|o|tra|fra|dopo|almeno|max|min)$/i;
+const REF_NEXT=/^(?:$|[,.;:!?)\]]|(?:e|ed|o|poi|su|sul|sulla|sui|sulle|in|nel|nella|nei|con|per|fino|quindi|a|al|alla|ai|di|del|della|da|dal|dalla|che|mentre|ma|finché|senza|insieme|così|e\s)\b)/i;
+function stripPhotoRefs(passi){
+  const re=/([A-Za-zÀ-ÿ'’]+)\s+(\d{1,2})(?=(\s*)(.{0,12}))/g;
+  let expected=1;const hits=[];
+  passi.forEach((p,pi)=>{let m;re.lastIndex=0;while((m=re.exec(p.testo))){
+    const n=+m[2],after=p.testo.slice(m.index+m[0].length).replace(/^\s+/,'');
+    if(n===expected&&!REF_PREV.test(m[1])&&REF_NEXT.test(after)){hits.push({pi,at:m.index+m[1].length,len:m[0].length-m[1].length});expected++;}
+  }});
+  if(hits.length<2)return passi;
+  for(let k=hits.length-1;k>=0;k--){const x=hits[k],t=passi[x.pi].testo;passi[x.pi].testo=t.slice(0,x.at)+t.slice(x.at+x.len);}
+  passi.forEach(p=>{p.testo=p.testo.replace(/\s+([,.;:!?])/g,'$1').replace(/\s{2,}/g,' ').trim();});
+  return passi;
+}
 function normalizeRecipe(d){
   d=d||{};
   if(!PORTATE.includes(d.portata))d.portata='secondo';
   if(!DIFF_LBL[d.difficolta])d.difficolta='facile';
   d.ingredienti=(d.ingredienti||[]).filter(i=>i&&i.nome).map(i=>({nome:String(i.nome),quantita:String(i.quantita??''),quantita4:String(i.quantita4??''),unita:String(i.unita??'')}));
-  d.passi=(d.passi||[]).map(p=>({testo:cleanStep(typeof p==='string'?p:p?.testo),fotoUrl:p?.fotoUrl||null})).filter(p=>p.testo);
+  d.passi=stripPhotoRefs((d.passi||[]).map(p=>({testo:cleanStep(typeof p==='string'?p:p?.testo),fotoUrl:p?.fotoUrl||null})).filter(p=>p.testo));
   d.strumenti=(d.strumenti||[]).filter(Boolean).map(String);
   if(typeof d.vegetariano!=='boolean')delete d.vegetariano;
   delete d.foto_piatto;
