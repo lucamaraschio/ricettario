@@ -644,12 +644,12 @@ try{
 <!-- ═══════════ APP ═══════════ -->
 <script>
 'use strict';
-const VERSION='3.1';
+const VERSION='3.2';
 const PORTATE=['antipasto','primo','secondo','contorno','dessert','bevanda','preparazione'];
 const PORT_LBL={antipasto:'Antipasto',primo:'Primo',secondo:'Secondo',contorno:'Contorno',dessert:'Dolce',bevanda:'Bevanda',preparazione:'Preparazione'};
 const PORT_PL={antipasto:'Antipasti',primo:'Primi',secondo:'Secondi',contorno:'Contorni',dessert:'Dolci',bevanda:'Bevande',preparazione:'Preparazioni'};
 const DIFF_LBL={facile:'Facile',medio:'Media',difficile:'Difficile'};
-const CFG={geminiTimeout:60000,pageTimeout:15000,defaultModel:'gemini-3.8-flash',scanMaxSide:1600,scanQuality:.8};
+const CFG={geminiFirstByte:45000,geminiIdle:30000,geminiTotal:180000,pageTimeout:15000,defaultModel:'gemini-3.8-flash',scanMaxSide:1600,scanQuality:.8};
 let DB=[];
 
 /* ═══════════ UTILS ═══════════ */
@@ -818,43 +818,86 @@ async function listFlashModels(key,signal){
   return list;
 }
 function gemErr(msg,extra){return Object.assign(new Error(msg),extra);}
+// Chiamata in streaming (SSE): il testo arriva a pezzi, così vediamo che Gemini sta lavorando.
+// Tempi: entro firstMs deve arrivare il primo dato, poi al massimo idleMs tra un pezzo e l'altro.
+async function geminiStream(url,init,o){
+  const ac=new AbortController();let why=null;
+  const kill=r=>{if(!why){why=r;ac.abort();}};
+  const onAbort=()=>kill('user');
+  if(o.signal){if(o.signal.aborted)kill('user');else o.signal.addEventListener('abort',onAbort,{once:true});}
+  let idle=setTimeout(()=>kill('first'),o.firstMs);
+  const total=setTimeout(()=>kill('total'),o.totalMs);
+  const bump=()=>{clearTimeout(idle);idle=setTimeout(()=>kill('idle'),o.idleMs);};
+  try{
+    const res=await fetch(url,{...init,signal:ac.signal});
+    if(!res.ok){const err=await res.json().catch(()=>({}));return {status:res.status,err:Array.isArray(err)?err[0]:err};}
+    const reader=res.body.getReader(),dec=new TextDecoder();
+    let buf='',text='',finish=null,block=null;
+    while(true){
+      const {done,value}=await reader.read();
+      if(done)break;
+      bump();
+      buf+=dec.decode(value,{stream:true}).replace(/\r/g,'');
+      let k;
+      while((k=buf.indexOf('\n\n'))>=0){
+        const ev=buf.slice(0,k);buf=buf.slice(k+2);
+        for(const line of ev.split('\n')){
+          if(!line.startsWith('data:'))continue;
+          let j;try{j=JSON.parse(line.slice(5));}catch(e){continue;}
+          if(j.error)return {status:j.error.code||500,err:j};
+          const c=j.candidates?.[0];
+          for(const p of c?.content?.parts||[])if(p.text&&!p.thought)text+=p.text;
+          if(c?.finishReason)finish=c.finishReason;
+          if(j.promptFeedback?.blockReason)block=j.promptFeedback.blockReason;
+        }
+      }
+      o.onProgress?.(text.length);
+    }
+    return {status:200,text:text.trim(),finish,block};
+  }catch(e){
+    if(why==='user')throw new DOMException('Annullato','AbortError');
+    if(why==='first')throw gemErr(`nessuna risposta in ${Math.round(o.firstMs/1000)} s`,{fallback:true,timeout:true});
+    if(why==='idle')throw gemErr(`risposta interrotta (ferma da ${Math.round(o.idleMs/1000)} s)`,{fallback:true,timeout:true});
+    if(why==='total')throw gemErr(`risposta troppo lenta (oltre ${Math.round(o.totalMs/1000)} s)`,{fallback:true,timeout:true});
+    throw gemErr('Connessione assente o bloccata. Controlla la rete e riprova.',{network:true});
+  }finally{clearTimeout(idle);clearTimeout(total);o.signal?.removeEventListener('abort',onAbort);}
+}
 // Una chiamata a un modello, con pochi nuovi tentativi. Gli errori "fallback" fanno provare un altro modello.
 async function geminiTry(model,key,parts,opt){
-  const url=`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  const url=`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
   const waits=[2500,6000];
   let useThinking=opt.thinking!==null,attempt=0;
   while(true){
     const gc={};
     if(opt.json!==false)gc.responseMimeType='application/json';
-    if(useThinking)gc.thinkingConfig={thinkingLevel:opt.thinking||'low'};
-    const res=await fetchT(url,{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:gc})},opt.timeout||CFG.geminiTimeout,opt.signal);
-    if(res.ok){
-      const d=await res.json();
-      const cand=d.candidates?.[0];
-      const text=(cand?.content?.parts||[]).filter(p=>p.text&&!p.thought).map(p=>p.text).join('').trim();
-      if(!text){
-        const why=d.promptFeedback?.blockReason||cand?.finishReason||'risposta vuota';
-        throw gemErr(`Gemini non ha restituito testo (${why}). Riprova.`);
-      }
-      return text;
+    if(useThinking)gc.thinkingConfig={thinkingLevel:opt.thinking||'minimal'};
+    const t0=Date.now();
+    const r=await geminiStream(url,{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:gc})},
+      {signal:opt.signal,firstMs:opt.firstMs||CFG.geminiFirstByte,idleMs:CFG.geminiIdle,totalMs:opt.timeout||CFG.geminiTotal,
+       onProgress:n=>opt.onProgress?.(n,model)});
+    if(r.status===200){
+      console.info('Gemini',model,((Date.now()-t0)/1000).toFixed(1)+' s',r.text.length+' caratteri',r.finish||'');
+      if(!r.text)throw gemErr(`Gemini non ha restituito testo (${r.block||r.finish||'risposta vuota'}). Riprova.`);
+      return r.text;
     }
-    const e=await res.json().catch(()=>({}));
-    const msg=e.error?.message||`HTTP ${res.status}`;
-    console.warn('Gemini',model,res.status,msg);
-    if(res.status===400&&useThinking&&/thinking/i.test(msg)){useThinking=false;continue;}
-    if(res.status===429||/quota|rate limit|resource.?exhausted/i.test(msg)){
+    const e=r.err||{};
+    const status=r.status;
+    const msg=e.error?.message||`HTTP ${status}`;
+    console.warn('Gemini',model,status,msg);
+    if(status===400&&useThinking&&/thinking/i.test(msg)){useThinking=false;continue;}
+    if(status===429||/quota|rate limit|resource.?exhausted/i.test(msg)){
       const delay=parseFloat(((e.error?.details||[]).find(x=>x.retryDelay)||{}).retryDelay)||0;
       const daily=/per.?day|daily|PerDay/i.test(msg);
       if(!daily&&delay&&delay<=20&&attempt<1){opt.onRetry?.(`Limite di richieste al minuto: riprovo tra ${Math.ceil(delay)} s…`);await sleep(delay*1000+500,opt.signal);attempt++;continue;}
       throw gemErr(daily?`quota giornaliera gratuita esaurita su ${model}`:`limite di richieste raggiunto su ${model}`,{fallback:true,quota:true,daily,raw:msg});
     }
-    const busy=res.status===503||res.status===500||res.status===502||res.status===504||/high demand|overloaded|try again later|unavailable/i.test(msg);
+    const busy=status===503||status===500||status===502||status===504||/high demand|overloaded|try again later|unavailable/i.test(msg);
     if(busy){
       if(attempt<waits.length){opt.onRetry?.(`Google è occupato, nuovo tentativo ${attempt+1} di ${waits.length}…`);await sleep(waits[attempt],opt.signal);attempt++;continue;}
-      throw gemErr(`${model} è sovraccarico (errore ${res.status})`,{fallback:true,raw:msg});
+      throw gemErr(`${model} è sovraccarico (errore ${status})`,{fallback:true,raw:msg});
     }
-    if(res.status===404||/not found|is not supported|deprecated/i.test(msg))throw gemErr(`il modello ${model} non è disponibile`,{fallback:true,notFound:true,raw:msg});
-    if(/api key/i.test(msg)||res.status===403)throw gemErr('Chiave Gemini non valida o senza permessi. Controllala nelle Impostazioni.',{raw:msg});
+    if(status===404||/not found|is not supported|deprecated/i.test(msg))throw gemErr(`il modello ${model} non è disponibile`,{fallback:true,notFound:true,raw:msg});
+    if(/api key/i.test(msg)||status===403)throw gemErr('Chiave Gemini non valida o senza permessi. Controllala nelle Impostazioni.',{raw:msg});
     if(/request payload size|too large/i.test(msg))throw gemErr('Le foto sono troppo pesanti per Gemini. Riprova con foto più piccole.',{raw:msg});
     throw gemErr('Gemini: '+msg,{raw:msg});
   }
@@ -882,10 +925,12 @@ async function geminiCall(parts,opt={}){
   const detail=fails.map(f=>f.message).join('; ');
   const tried=order.slice(0,fails.length).join(', ');
   if(allQuota)throw gemErr(fails.some(f=>f.daily)?`Quota gratuita giornaliera di Gemini esaurita (modelli provati: ${tried}). Si azzera ogni giorno: riprova domani.`:`Troppe richieste a Gemini in poco tempo (modelli provati: ${tried}). Aspetta un minuto e riprova.`);
+  if(fails.length&&fails.every(f=>f.timeout))throw gemErr(`Gemini è troppo lento in questo momento (modelli provati: ${order.slice(0,fails.length).join(', ')}). Riprova tra qualche minuto.`);
   throw gemErr(`Google non riesce a rispondere ora (${detail||'nessun modello alternativo disponibile'}). Riprova tra qualche minuto.`);
 }
 function imgPart(d){const [h,b]=d.split(',');return {inline_data:{mime_type:(h.match(/:(.*?);/)||[])[1]||'image/jpeg',data:b}};}
 const retryNotice=t=>setLoading(null,t);
+const progressNotice=(n,model)=>setLoading(null,n?`Gemini sta scrivendo… ${n} caratteri`:'');
 
 /* ═══════════ TASK (loading + annulla) ═══════════ */
 let _task=null;
@@ -1403,7 +1448,7 @@ async function searchPhotos(){
   if(await getKey()){
     try{
       const ingrs=[...document.querySelectorAll('#ingrList .in-name')].map(i=>i.value.trim()).filter(Boolean).slice(0,5);
-      const q=await geminiCall([{text:`Italian recipe "${nome}" (ingredients: ${ingrs.join(', ')||'n/a'}). Write ONLY a short English search query (3-5 words) to find a photo of this finished dish on a stock photo site. No quotes, no extra words.`}],{json:false,thinking:'minimal',timeout:15000});
+      const q=await geminiCall([{text:`Italian recipe "${nome}" (ingredients: ${ingrs.join(', ')||'n/a'}). Write ONLY a short English search query (3-5 words) to find a photo of this finished dish on a stock photo site. No quotes, no extra words.`}],{json:false,thinking:'minimal',firstMs:15000,timeout:20000});
       if(q&&q.length<80)query=q.replace(/["'\n]/g,'').trim();
     }catch(e){console.warn('query foto',e);}
   }
@@ -1476,7 +1521,7 @@ async function startScan(){
   const imgs={...scanData};
   const data=await runTask('Leggo la scheda…','Gemini sta trascrivendo ingredienti e passi',async signal=>{
     const parts=[imgPart(imgs.A)];if(imgs.B)parts.push(imgPart(imgs.B));parts.push({text:SCAN_PROMPT});
-    const t=await geminiCall(parts,{thinking:'low',signal,onRetry:retryNotice});
+    const t=await geminiCall(parts,{thinking:'minimal',signal,onRetry:retryNotice,onProgress:progressNotice});
     const d=parseJSON(t);
     setLoading('Preparo la scheda…','Ritaglio la foto del piatto');
     let foto=imgs.A;
@@ -1569,7 +1614,7 @@ async function importFromUrl(){
   const hasKey=!!await getKey();
   const data=await runTask('Leggo la pagina…','Recupero la ricetta dal sito',async signal=>{
     const page=await fetchPage(url,signal);
-    const opt={thinking:'low',signal,onRetry:retryNotice};
+    const opt={thinking:'minimal',signal,onRetry:retryNotice,onProgress:progressNotice};
     let d,raw=null;
     if(page.ld){
       const c=ldCompact(page.ld);
@@ -1609,7 +1654,7 @@ async function importFromText(){
   const t=$('textInput').value.trim();
   if(t.length<30){toast('Incolla il testo completo della ricetta','err');return;}
   const data=await runTask('Organizzo la ricetta…','Gemini estrae ingredienti e passi',async signal=>{
-    return normalizeRecipe(parseJSON(await geminiCall([{text:`Estrai la ricetta da questo testo.\n${IMPORT_RULES}\n\nTESTO:\n${recipeExcerpt(t,40000)}`}],{thinking:'low',signal,onRetry:retryNotice})));
+    return normalizeRecipe(parseJSON(await geminiCall([{text:`Estrai la ricetta da questo testo.\n${IMPORT_RULES}\n\nTESTO:\n${recipeExcerpt(t,40000)}`}],{thinking:'minimal',signal,onRetry:retryNotice,onProgress:progressNotice})));
   });
   if(!data)return;
   closeLayer('ov-import');openEditor(data,{title:'Controlla e salva'});
@@ -1671,7 +1716,7 @@ Restituisci SOLO JSON: {"nome":null,"portata":null,"descrizione":null,"tempoPrep
       :`Sei un assistente di cucina. L'utente ha descritto una ricetta a voce (il testo può contenere errori di trascrizione: correggi solo parole evidentemente storpiate, senza inventare contenuti).
 DETTATO: "${t}"
 ${IMPORT_RULES}`;
-    return parseJSON(await geminiCall([{text:prompt}],{thinking:'low',signal,onRetry:retryNotice}));
+    return parseJSON(await geminiCall([{text:prompt}],{thinking:'minimal',signal,onRetry:retryNotice,onProgress:progressNotice}));
   });
   if(!data)return;
   closeLayer('ov-voice');
@@ -1826,7 +1871,7 @@ async function chooseModel(){
 async function testGemini(){
   if($('keyIn').value.trim())await setKey($('keyIn').value);
   const t0=Date.now();
-  const r=await runTask('Verifico Gemini…',getModel(),async signal=>parseJSON(await geminiCall([{text:'Rispondi solo con {"ok":true}'}],{thinking:'minimal',timeout:30000,signal,onRetry:retryNotice})));
+  const r=await runTask('Verifico Gemini…',getModel(),async signal=>parseJSON(await geminiCall([{text:'Rispondi solo con {"ok":true}'}],{thinking:'minimal',firstMs:30000,signal,onRetry:retryNotice})));
   if(r)toast(`Gemini funziona con ${Gem.lastModel} (${((Date.now()-t0)/1000).toFixed(1).replace('.',',')} s)`,'ok');
 }
 function setTheme(t){localStorage.setItem('theme',t);applyTheme();document.querySelectorAll('#settingsBody .seg button').forEach(b=>b.classList.toggle('on',b.getAttribute('onclick')===`setTheme('${t}')`));}
