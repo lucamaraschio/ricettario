@@ -663,7 +663,7 @@ try{
 <!-- ═══════════ APP ═══════════ -->
 <script>
 'use strict';
-const VERSION='3.4';
+const VERSION='3.5';
 const PORTATE=['antipasto','primo','secondo','contorno','dessert','bevanda','preparazione'];
 const PORT_LBL={antipasto:'Antipasto',primo:'Primo',secondo:'Secondo',contorno:'Contorno',dessert:'Dolce',bevanda:'Bevanda',preparazione:'Preparazione'};
 const PORT_PL={antipasto:'Antipasti',primo:'Primi',secondo:'Secondi',contorno:'Contorni',dessert:'Dolci',bevanda:'Bevande',preparazione:'Preparazioni'};
@@ -822,7 +822,12 @@ async function fetchT(url,opts={},ms=20000,signal){
 
 /* ═══════════ GEMINI ═══════════ */
 // Elenco dei modelli Flash disponibili per la chiave (cache 1 h), ordinati dal più recente
-const Gem={models:null,modelsAt:0,lastModel:null,avoid:{}};
+const Gem={models:null,modelsAt:0,lastModel:null,avoid:(()=>{try{return JSON.parse(localStorage.getItem('gemAvoid')||'{}');}catch(e){return {};}})()};
+// La quota gratuita giornaliera si azzera a mezzanotte del Pacifico (verso le 9 del mattino in Italia)
+function nextQuotaReset(){const d=new Date();const r=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate(),8,0,0));if(r<=d)r.setUTCDate(r.getUTCDate()+1);return r.getTime();}
+const resetLabel=()=>new Date(nextQuotaReset()).toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'});
+const avoidInfo=m=>{const a=Gem.avoid[m];return a&&(typeof a==='number'?{until:a}:a).until>Date.now()?(typeof a==='number'?{until:a}:a):null;};
+function markAvoid(m,why,until){Gem.avoid[m]={why,until};for(const k in Gem.avoid)if(!avoidInfo(k))delete Gem.avoid[k];try{localStorage.setItem('gemAvoid',JSON.stringify(Gem.avoid));}catch(e){}}
 async function listFlashModels(key,signal){
   if(Gem.models&&Date.now()-Gem.modelsAt<36e5)return Gem.models;
   const r=await fetchT('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200',{headers:{'x-goog-api-key':key}},15000,signal);
@@ -927,25 +932,34 @@ async function geminiCall(parts,opt={}){
   const key=await getKey();
   if(!key)throw gemErr('Manca la chiave Gemini: aggiungila nelle Impostazioni.',{noKey:true});
   const primary=getModel();
-  const okNow=m=>!(Gem.avoid[m]>Date.now());
-  const loadAlts=async()=>(await listFlashModels(key,opt.signal).catch(err=>{if(err.name==='AbortError')throw err;return [];})).filter(m=>m!==primary&&okNow(m)).slice(0,2);
-  let order=[primary],altsLoaded=false;
-  // modello appena fallito (sovraccarico/quota): parti dalle alternative, ma riprova comunque anche quello
-  if(!okNow(primary)){order=[...await loadAlts(),primary];altsLoaded=true;}
-  const fails=[];
-  for(let i=0;i<order.length&&i<3;i++){
-    const model=order[i];
+  const okNow=m=>!avoidInfo(m);
+  let alts=null;
+  const getAlts=async()=>alts??=(await listFlashModels(key,opt.signal).catch(err=>{if(err.name==='AbortError')throw err;return [];})).filter(m=>m!==primary);
+  const quotaMsg=t=>`Quota gratuita di Gemini esaurita per oggi${t?` (modelli provati: ${t})`:''}. Si azzera verso le ${resetLabel()}. Per non avere limiti puoi attivare il pagamento a consumo della chiave su aistudio.google.com.`;
+  let queue=okNow(primary)?[primary]:(await getAlts()).filter(okNow);
+  if(!queue.length){
+    const all=[primary,...(alts||[])];
+    if(all.every(m=>avoidInfo(m)?.why==='daily'))throw gemErr(quotaMsg(''));
+    queue=[primary];
+  }
+  const fails=[],tried=[];let timeouts=0;
+  // gli errori di quota arrivano subito, quindi si possono provare più modelli; le attese lunghe al massimo 2
+  while(queue.length&&tried.length<6&&timeouts<2){
+    const model=queue.shift();tried.push(model);
     if(model!==primary)opt.onRetry?.(`Provo con un altro modello: ${model}…`);
     try{const t=await geminiTry(model,key,parts,opt);Gem.lastModel=model;return t;}
-    catch(e){if(!e.fallback)throw e;fails.push(e);Gem.avoid[model]=Date.now()+(e.daily?36e5:3e5);}
-    if(!altsLoaded){altsLoaded=true;order.push(...(await loadAlts()).filter(m=>!order.includes(m)));}
+    catch(e){
+      if(!e.fallback)throw e;
+      fails.push(e);if(e.timeout)timeouts++;
+      markAvoid(model,e.daily?'daily':e.timeout?'slow':e.quota?'rate':'busy',e.daily?nextQuotaReset():Date.now()+(e.timeout?6e5:3e5));
+    }
+    if(!queue.length&&alts===null)queue=(await getAlts()).filter(m=>okNow(m)&&!tried.includes(m));
   }
-  const allQuota=fails.length&&fails.every(f=>f.quota);
-  const detail=fails.map(f=>f.message).join('; ');
-  const tried=order.slice(0,fails.length).join(', ');
-  if(allQuota)throw gemErr(fails.some(f=>f.daily)?`Quota gratuita giornaliera di Gemini esaurita (modelli provati: ${tried}). Si azzera ogni giorno: riprova domani.`:`Troppe richieste a Gemini in poco tempo (modelli provati: ${tried}). Aspetta un minuto e riprova.`);
-  if(fails.length&&fails.every(f=>f.timeout))throw gemErr(`Gemini è troppo lento in questo momento (modelli provati: ${order.slice(0,fails.length).join(', ')}). Riprova tra qualche minuto.`);
-  throw gemErr(`Google non riesce a rispondere ora (${detail||'nessun modello alternativo disponibile'}). Riprova tra qualche minuto.`);
+  const list=tried.join(', ');
+  if(fails.some(f=>f.daily))throw gemErr(quotaMsg(list));
+  if(fails.length&&fails.every(f=>f.quota))throw gemErr(`Troppe richieste a Gemini in poco tempo (modelli provati: ${list}). Aspetta un minuto e riprova.`);
+  if(fails.length&&fails.every(f=>f.timeout))throw gemErr(`Gemini è troppo lento in questo momento (modelli provati: ${list}). Riprova tra qualche minuto.`);
+  throw gemErr(`Google non riesce a rispondere ora (${fails.map(f=>f.message).join('; ')||'nessun modello disponibile'}). Riprova tra qualche minuto.`);
 }
 function imgPart(d){const [h,b]=d.split(',');return {inline_data:{mime_type:(h.match(/:(.*?);/)||[])[1]||'image/jpeg',data:b}};}
 const retryNotice=t=>setLoading(null,t);
@@ -2016,7 +2030,7 @@ async function openSettings(){
   openLayer('ov-settings');
 }
 async function saveKeyUI(){await setKey($('keyIn').value);$('scanKeyWarn').style.display=(await getKey())?'none':'flex';toast($('keyIn').value.trim()?'Chiave salvata':'Chiave rimossa','ok');}
-function saveModel(v){v=(v||'').trim();if(v&&v!==CFG.defaultModel)localStorage.setItem('geminiModel',v);else localStorage.removeItem('geminiModel');delete Gem.avoid[getModel()];const l=$('modelLbl');if(l)l.textContent=getModel();toast('Modello: '+getModel(),'ok');}
+function saveModel(v){v=(v||'').trim();if(v&&v!==CFG.defaultModel)localStorage.setItem('geminiModel',v);else localStorage.removeItem('geminiModel');const l=$('modelLbl');if(l)l.textContent=getModel();toast('Modello: '+getModel(),'ok');}
 async function chooseModel(){
   if($('keyIn')?.value.trim())await setKey($('keyIn').value);
   const key=await getKey();
@@ -2026,7 +2040,7 @@ async function chooseModel(){
   if(!list)return;
   if(!list.length){toast('Non riesco a leggere l\'elenco dei modelli. Controlla la chiave.','err');return;}
   const cur=getModel();
-  actionSheet('Modello Gemini',[...list.slice(0,10).map(m=>({label:m,icon:m===cur?'check':'sparkle',fn:()=>saveModel(m)})),{label:'Ripristina predefinito ('+CFG.defaultModel+')',icon:'arr-r',fn:()=>saveModel('')}]);
+  actionSheet('Modello Gemini',[...list.slice(0,10).map(m=>({label:m+(avoidInfo(m)?.why==='daily'?' · quota esaurita':''),icon:m===cur?'check':'sparkle',fn:()=>saveModel(m)})),{label:'Ripristina predefinito ('+CFG.defaultModel+')',icon:'arr-r',fn:()=>saveModel('')}]);
 }
 async function testGemini(){
   if($('keyIn').value.trim())await setKey($('keyIn').value);
