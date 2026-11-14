@@ -2,7 +2,7 @@
 // index.html: network-first (sempre l'ultima versione quando c'è rete, cache se offline)
 // file statici, font e SDK Firebase: stale-while-revalidate
 // API (Firebase DB, Gemini, proxy, foto): mai in cache
-const VERSION = 'ric-v4';
+const VERSION = 'ric-v5';
 const CORE = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png', './apple-touch-icon.png', './logo.svg', './favicon-32.png'];
 const NO_CACHE = /firebasedatabase\.app|firebaseio\.com|googleapis\.com\/(identitytoolkit|securetoken)|identitytoolkit|securetoken|generativelanguage|r\.jina\.ai|allorigins|codetabs|api\.unsplash|api\.pexels/;
 
