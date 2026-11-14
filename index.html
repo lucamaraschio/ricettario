@@ -885,7 +885,7 @@ async function loadSavedKey(){
 async function cropBox(dataUrl,box,rotate){return new Promise(res=>{const img=new Image();img.onload=()=>{const W=img.naturalWidth,H=img.naturalHeight;const cx=Math.max(0,box.x*W),cy=Math.max(0,box.y*H);const cw=Math.min(W-cx,box.w*W),ch=Math.min(H-cy,box.h*H);if(cw<20||ch<20){res(dataUrl);return;}const ang=(rotate||0)*Math.PI/180;const sin=Math.abs(Math.sin(ang)),cos=Math.abs(Math.cos(ang));const canvas=document.createElement('canvas');if(rotate){canvas.width=Math.round(cw*cos+ch*sin);canvas.height=Math.round(cw*sin+ch*cos);}else{canvas.width=cw;canvas.height=ch;}const ctx=canvas.getContext('2d');if(rotate){ctx.translate(canvas.width/2,canvas.height/2);ctx.rotate(ang);ctx.drawImage(img,cx,cy,cw,ch,-cw/2,-ch/2,cw,ch);}else{ctx.drawImage(img,cx,cy,cw,ch,0,0,cw,ch);}res(canvas.toDataURL('image/jpeg',.82));};img.onerror=()=>res(dataUrl);img.src=dataUrl;});}
 
 async function geminiCall(key,parts){
-  const res=await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},body:JSON.stringify({contents:[{parts}]})});
+  const res=await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent',{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},body:JSON.stringify({contents:[{parts}]})});
   if(!res.ok){const e=await res.json();throw new Error(e.error?.message||`HTTP ${res.status}`);}
   const d=await res.json();return(d.candidates?.[0]?.content?.parts?.[0]?.text||'').replace(/```json|```/g,'').trim();
 }
