@@ -663,7 +663,7 @@ try{
 <!-- ═══════════ APP ═══════════ -->
 <script>
 'use strict';
-const VERSION='3.3';
+const VERSION='3.4';
 const PORTATE=['antipasto','primo','secondo','contorno','dessert','bevanda','preparazione'];
 const PORT_LBL={antipasto:'Antipasto',primo:'Primo',secondo:'Secondo',contorno:'Contorno',dessert:'Dolce',bevanda:'Bevanda',preparazione:'Preparazione'};
 const PORT_PL={antipasto:'Antipasti',primo:'Primi',secondo:'Secondi',contorno:'Contorni',dessert:'Dolci',bevanda:'Bevande',preparazione:'Preparazioni'};
@@ -1566,7 +1566,7 @@ async function startScan(){
     if(b&&b.w>.15&&b.h>.15&&b.x>=0&&b.y>=0){try{foto=await cropBox(imgs.A,b);}catch(e){console.warn(e);}}
     delete d.copertina;
     d.fotoUrl=foto;
-    d.passi=(d.passi||[]).map(p=>({testo:typeof p==='string'?p:(p.testo||''),fotoUrl:null})).filter(p=>p.testo);
+    d.passi=(d.passi||[]).map(p=>({testo:cleanStep(typeof p==='string'?p:(p.testo||'')),fotoUrl:null})).filter(p=>p.testo);
     d.ingredienti=(d.ingredienti||[]).filter(i=>i&&i.nome);
     return d;
   });
@@ -1583,6 +1583,7 @@ async function pasteInto(id){try{const t=await navigator.clipboard.readText();if
 const IMPORT_RULES=`REGOLE:
 - Trascrivi ingredienti e passi come scritti nella fonte, senza inventare nulla e senza riassumere
 - NON aggiungere ingredienti, passi o strumenti non presenti
+- Nel testo dei passi NON riportare i numeri o le etichette dei passi del sito ("1.", "Passo 2:", "Step 3"), anche quando unisci più passi in uno; ogni passo inizia con la lettera maiuscola
 - Ignora del tutto pubblicità, inviti a iscriversi, link ad altre ricette, didascalie promozionali e commenti
 - PASSI: segui la suddivisione del procedimento originale (passi numerati, titoletti o paragrafi del procedimento). Se il testo di un passo è interrotto da pubblicità, immagini, link o a capo e il discorso continua (stessa azione, frase che prosegue, frase che inizia in minuscolo o con "poi", "quindi", "intanto", "a questo punto"…), uniscilo in UN SOLO passo. Non creare mai un passo da un frammento di frase. Se il procedimento è un unico blocco senza divisioni, dividilo in fasi coerenti (es. preparare le verdure, cuocere, assemblare, servire), di solito 3-8 passi
 - Dosi: "quantita" = dose per 2 persone, "quantita4" = dose per 4 persone. Se la fonte indica il numero di porzioni, calcola le due dosi in proporzione arrotondando in modo sensato; se non lo indica, metti la dose originale in "quantita", lascia "quantita4" vuoto e scrivi nelle note "Dosi originali della ricetta"
@@ -1787,12 +1788,24 @@ async function importFromText(){
   if(!data)return;
   closeLayer('ov-import');openEditor(data,{title:'Controlla e salva'});
 }
+// Pulizia del testo di un passo: via numerazioni del sito (anche in mezzo, dopo un accorpamento), spazi doppi, maiuscola iniziale
+const UP='A-ZÀÁÈÉÌÍÒÓÙÚ';
+function cleanStep(t){
+  let s=String(t||'').replace(/\s+/g,' ').trim();
+  const lead=new RegExp(`^(?:(?:passo|step|fase)\\s*)?\\d{1,2}\\s*(?:[.)\\]:–-]|°)\\s*`,'i');
+  for(let k=0;k<2;k++)s=s.replace(lead,'');
+  s=s.replace(/^(?:passo|step|fase)\s*\d{1,2}\b\s*/i,'');
+  // numerazione rimasta dopo la fine di una frase: "… morbide. 2. Farcite" / "… morbide. Passo 3: Farcite" / "… morbide. 2 Farcite"
+  s=s.replace(new RegExp(`([.!?;:])\\s+(?:(?:passo|step|fase)\\s*)?\\d{1,2}\\s*(?:[.):–-]|°)?\\s+(?=[${UP}])`,'gi'),'$1 ');
+  s=s.trim();
+  return s?s.charAt(0).toLocaleUpperCase('it-IT')+s.slice(1):s;
+}
 function normalizeRecipe(d){
   d=d||{};
   if(!PORTATE.includes(d.portata))d.portata='secondo';
   if(!DIFF_LBL[d.difficolta])d.difficolta='facile';
   d.ingredienti=(d.ingredienti||[]).filter(i=>i&&i.nome).map(i=>({nome:String(i.nome),quantita:String(i.quantita??''),quantita4:String(i.quantita4??''),unita:String(i.unita??'')}));
-  d.passi=(d.passi||[]).map(p=>({testo:typeof p==='string'?p:String(p?.testo||''),fotoUrl:p?.fotoUrl||null})).filter(p=>p.testo);
+  d.passi=(d.passi||[]).map(p=>({testo:cleanStep(typeof p==='string'?p:p?.testo),fotoUrl:p?.fotoUrl||null})).filter(p=>p.testo);
   d.strumenti=(d.strumenti||[]).filter(Boolean).map(String);
   if(typeof d.vegetariano!=='boolean')delete d.vegetariano;
   delete d.foto_piatto;
@@ -1869,7 +1882,7 @@ function mergeVoiceIntoForm(d){
   (d.nuovi_ingredienti||[]).filter(i=>i?.nome).forEach(i=>l.insertAdjacentHTML('beforeend',ingRowHTML(i)));
   const pl=$('passiList');
   [...pl.querySelectorAll('.step-ed')].forEach(s=>{if(!s.querySelector('textarea').value.trim()&&!s._url)s.remove();});
-  (d.nuovi_passi||[]).filter(p=>p?.testo||typeof p==='string').forEach(p=>{pl.insertAdjacentHTML('beforeend',stepRowHTML(typeof p==='string'?{testo:p}:p));const el=pl.lastElementChild;el._url=null;renderStepPhoto(el);});
+  (d.nuovi_passi||[]).filter(p=>p?.testo||typeof p==='string').forEach(p=>{pl.insertAdjacentHTML('beforeend',stepRowHTML({testo:cleanStep(typeof p==='string'?p:p.testo)}));const el=pl.lastElementChild;el._url=null;renderStepPhoto(el);});
   renumberSteps();
   if(d.strumenti_aggiuntivi?.length){const s=$('f_strum');s.value=[s.value.trim(),...d.strumenti_aggiuntivi].filter(Boolean).join(', ');}
   document.querySelectorAll('#edBody textarea').forEach(autoGrow);
